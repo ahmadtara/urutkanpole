@@ -2,6 +2,7 @@ import zipfile
 import os
 import tempfile
 import simplekml
+import pandas as pd
 from lxml import etree as ET
 from shapely.geometry import Point, LineString, Polygon
 import streamlit as st
@@ -136,7 +137,7 @@ def export_kmz(classified, output_path, prefix="MR.OATKRP.P", padding=3):
     """Export hasil ke KMZ baru, folder per LINE dengan urutan global"""
     kml = simplekml.Kml()
 
-    # urutan line A→D
+    # urutan line A→Z
     line_order = sorted(classified.keys())
 
     counter = 1
@@ -169,6 +170,20 @@ if uploaded_file is not None:
         try:
             tree, _ = parse_kmz(kmz_path)
             classified = classify_poles(tree)
+
+            # Buat DataFrame untuk preview
+            data_rows = []
+            counter = 1
+            for line_name in sorted(classified.keys()):
+                for (old_name, p, _) in classified[line_name]["poles"]:
+                    new_name = f"MR.OATKRP.P{str(counter).zfill(3)}"
+                    data_rows.append([line_name, old_name, new_name, p.x, p.y])
+                    counter += 1
+
+            df = pd.DataFrame(data_rows, columns=["LINE", "Old Name", "New Name", "Longitude", "Latitude"])
+
+            st.subheader("📊 Hasil klasifikasi POLE per LINE")
+            st.dataframe(df, use_container_width=True)
 
             output_path = "output_pole_per_line.kmz"
             export_kmz(classified, output_path)
