@@ -9,7 +9,9 @@ from shapely.geometry import Point, LineString, Polygon
 # Ambang batas jarak pole ke kabel (meter)
 DIST_THRESHOLD = 10  
 
-
+# ==============================
+# Fungsi Parsing KMZ
+# ==============================
 def parse_kmz(kmz_file):
     """Extract KMZ dari upload dan parse KML utama"""
     tmpdir = tempfile.mkdtemp()
@@ -30,7 +32,13 @@ def parse_kmz(kmz_file):
     with open(kml_file, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # Hapus semua prefix namespace yang bikin error
+    # Hapus deklarasi xmlns yang bikin error
+    content = re.sub(r"\s+xmlns:ns\d+=\"[^\"]*\"", "", content)  # ns1, ns2, dst
+    content = re.sub(r"\s+xmlns:gx=\"[^\"]*\"", "", content)
+    content = re.sub(r"\s+xmlns:atom=\"[^\"]*\"", "", content)
+    content = re.sub(r"\s+xmlns:kml=\"[^\"]*\"", "", content)
+
+    # Hapus prefix di tag
     for bad_ns in ["ns1:", "ns2:", "gx:", "atom:", "kml:"]:
         content = content.replace(bad_ns, "")
 
@@ -42,158 +50,101 @@ def parse_kmz(kmz_file):
     return tree, tmpdir
 
 
-def extract_geometry(placemark):
-    """Ambil Point / LineString / Polygon dari Placemark"""
-    geom = placemark.find(".//Point/coordinates")
-    if geom is not None:
-        lon, lat, *_ = map(float, geom.text.strip().split(","))
-        return Point(lon, lat)
+# ==============================
+# Ekstrak koordinat dari KML
+# ==============================
+def extract_geometry(tree):
+    """Ambil koordinat POLE (Point) dan LINE (LineString)"""
+    root = tree.getroot()
+    ns = {"kml": "http://www.opengis.net/kml/2.2"}
 
-    geom = placemark.find(".//LineString/coordinates")
-    if geom is not None:
-        coords = []
-        for c in geom.text.strip().split():
-            lon, lat, *_ = map(float, c.split(","))
-            coords.append((lon, lat))
-        return LineString(coords)
-
-    geom = placemark.find(".//Polygon/outerBoundaryIs/LinearRing/coordinates")
-    if geom is not None:
-        coords = []
-        for c in geom.text.strip().split():
-            lon, lat, *_ = map(float, c.split(","))
-            coords.append((lon, lat))
-        return Polygon(coords)
-
-    return None
-
-
-def classify_poles(tree):
-    """Klasifikasikan POLE ke dalam masing-masing LINE"""
-    doc = tree.getroot()
-
-    # ambil semua POLE global (urutan sesuai KML asli)
     poles = []
-    for pm in doc.findall(".//Folder[name='POLE']//Placemark"):
-        name = pm.find("name").text
-        geom = extract_geometry(pm)
-        if isinstance(geom, Point):
-            poles.append((name, geom))
+    lines = []
 
-    # Simpan semua kabel & boundary per LINE
-    lines_data = {}
-    for line_folder in doc.findall(".//Folder"):
-        line_name_el = line_folder.find("name")
-        if line_name_el is None:
-            continue
-        line_name = line_name_el.text
-        if not line_name or not line_name.upper().startswith("LINE"):
-            continue
+    for pm in root.findall(".//{http://www.opengis.net/kml/2.2}Placemark"):
+        name = pm.find("{http://www.opengis.net/kml/2.2}name")
+        name = name.text if name is not None else "Unnamed"
 
-        # cari distribution cable
-        cable = None
-        for pm in line_folder.findall(".//Placemark"):
-            nm = (pm.find("name").text or "").upper()
-            if "DISTRIBUTION CABLE" in nm:
-                cable = extract_geometry(pm)
+        point = pm.find(".//{http://www.opengis.net/kml/2.2}Point")
+        linestring = pm.find(".//{http://www.opengis.net/kml/2.2}LineString")
 
-        # cari boundary
-        boundaries = []
-        for pm in line_folder.findall(".//Placemark"):
-            nm = (pm.find("name").text or "").upper()
-            if "BOUNDARY" in nm:
-                boundaries.append((nm, extract_geometry(pm)))
+        if point is not None:
+            coords_text = point.find("{http://www.opengis.net/kml/2.2}coordinates").text.strip()
+            lon, lat, *_ = map(float, coords_text.split(","))
+            poles.append({"name": name, "point": Point(lon, lat)})
 
-        lines_data[line_name.upper()] = {
-            "cable": cable,
-            "boundaries": boundaries,
-            "poles": []
-        }
+        elif linestring is not None:
+            coords_text = linestring.find("{http://www.opengis.net/kml/2.2}coordinates").text.strip()
+            coords = []
+            for c in coords_text.split():
+                lon, lat, *_ = map(float, c.split(","))
+                coords.append((lon, lat))
+            lines.append({"name": name, "line": LineString(coords)})
 
-    # Assign setiap POLE ke line terdekat
-    for name, p in poles:
-        assigned_line = None
-        proj_val = None
-
-        for line_name, content in lines_data.items():
-            cable = content["cable"]
-            boundaries = content["boundaries"]
-
-            # cek ke kabel
-            if cable and isinstance(cable, LineString):
-                d = p.distance(cable)
-                if d <= DIST_THRESHOLD / 111320:  # meter → degree approx
-                    assigned_line = line_name
-                    proj_val = cable.project(p)
-                    break
-
-            # kalau tidak kena kabel, cek boundary
-            if not assigned_line and boundaries:
-                for bname, boundary in boundaries:
-                    if isinstance(boundary, Polygon) and p.within(boundary):
-                        line_key = bname[0].upper()  # huruf depan boundary
-                        if line_key in line_name.upper():
-                            assigned_line = line_name
-                            proj_val = p.x
-                            break
-            if assigned_line:
-                break
-
-        if assigned_line:
-            lines_data[assigned_line]["poles"].append((name, p, proj_val))
-
-    return lines_data
+    return poles, lines
 
 
-def export_kmz(classified, output_path, prefix="MR.OATKRP.P", padding=3):
-    """Export hasil ke KMZ baru, folder per LINE dengan urutan global"""
+# ==============================
+# Urutkan POLE ke sepanjang LINE
+# ==============================
+def classify_poles(poles, lines):
+    results = []
+    for line in lines:
+        for pole in poles:
+            dist_along = line["line"].project(pole["point"])
+            results.append({
+                "line": line["name"],
+                "pole": pole["name"],
+                "coord": (pole["point"].x, pole["point"].y),
+                "distance": dist_along
+            })
+    results.sort(key=lambda x: (x["line"], x["distance"]))
+    return results
+
+
+# ==============================
+# Export hasil ke KMZ
+# ==============================
+def export_kmz(results, output_file):
     kml = simplekml.Kml()
-
-    # urutan line A→D
-    line_order = sorted(classified.keys())
-
-    counter = 1
-    for line_name in line_order:
-        f_line = kml.newfolder(name=line_name)
-        f_pole = f_line.newfolder(name="POLE")
-
-        poles = classified[line_name]["poles"]
-        for (old_name, p, _) in poles:
-            new_name = f"{prefix}{str(counter).zfill(padding)}"
-            f_pole.newpoint(name=new_name, coords=[(p.x, p.y)])
-            counter += 1
-
-    kml.savekmz(output_path)
+    last_line = None
+    folder = None
+    for r in results:
+        if r["line"] != last_line:
+            folder = kml.newfolder(name=f"Line {r['line']}")
+            last_line = r["line"]
+        folder.newpoint(name=f"POLE {r['pole']}", coords=[r["coord"]])
+    kml.savekmz(output_file)
 
 
-# ----------------
-# STREAMLIT APP
-# ----------------
-def main():
-    st.title("📍 Urutkan POLE per LINE dari KMZ")
+# ==============================
+# Streamlit UI
+# ==============================
+st.title("📍 Urutkan POLE ke Line dari KMZ")
 
-    uploaded = st.file_uploader("Upload file KMZ", type=["kmz"])
-    if uploaded:
-        with st.spinner("🔍 Memproses KMZ..."):
-            try:
-                tree, tmpdir = parse_kmz(uploaded)
-                classified = classify_poles(tree)
+uploaded_file = st.file_uploader("Upload file KMZ", type=["kmz"])
 
-                # export hasil
-                out_path = os.path.join(tmpdir, "output_pole_per_line.kmz")
-                export_kmz(classified, out_path)
+if uploaded_file:
+    try:
+        st.success(f"✅ File `{uploaded_file.name}` berhasil diupload")
 
-                with open(out_path, "rb") as f:
-                    st.download_button(
-                        label="⬇️ Download hasil KMZ",
-                        data=f,
-                        file_name="output_pole_per_line.kmz",
-                        mime="application/vnd.google-earth.kmz"
-                    )
-                st.success("Selesai ✔")
-            except Exception as e:
-                st.error(f"❌ Error: {e}")
+        tree, tmpdir = parse_kmz(uploaded_file)
+        poles, lines = extract_geometry(tree)
 
+        st.write(f"📌 Ditemukan {len(poles)} POLE dan {len(lines)} LINE di dalam KMZ")
 
-if __name__ == "__main__":
-    main()
+        if st.button("Urutkan POLE"):
+            results = classify_poles(poles, lines)
+
+            st.write("### Hasil Urutan:")
+            for r in results[:20]:  # tampilkan 20 pertama
+                st.write(f"Line {r['line']} - POLE {r['pole']} - Dist {r['distance']:.2f}")
+
+            out_kmz = os.path.join(tmpdir, "POLE_URUTAN.kmz")
+            export_kmz(results, out_kmz)
+
+            with open(out_kmz, "rb") as f:
+                st.download_button("⬇️ Download KMZ Hasil", f, file_name="POLE_URUTAN.kmz")
+
+    except Exception as e:
+        st.error(f"❌ Error: {e}")
