@@ -4,6 +4,7 @@ import tempfile
 import simplekml
 from lxml import etree as ET
 from shapely.geometry import Point, LineString, Polygon
+from shapely.ops import nearest_points
 
 # Ambang batas jarak pole ke kabel (meter)
 DIST_THRESHOLD = 30  
@@ -60,7 +61,7 @@ def classify_poles(tree):
     ns = {"kml": "http://www.opengis.net/kml/2.2"}
     doc = tree.getroot()
 
-    # ambil semua POLE global (urut sesuai file asli)
+    # ambil semua POLE global
     poles = []
     for pm in doc.findall(".//kml:Folder[kml:name='POLE']//kml:Placemark", ns):
         name = pm.find("kml:name", ns).text
@@ -68,61 +69,54 @@ def classify_poles(tree):
         if isinstance(geom, Point):
             poles.append((name, geom))
 
-    # siapkan dict hasil
-    result = {f"LINE {ch}": {"POLE": []} for ch in ["A", "B", "C", "D"]}
-
-    # kumpulkan kabel & boundary per line
-    line_info = {}
+    result = {}
+    # loop setiap LINE utama (A, B, C, D)
     for line_folder in doc.findall(".//kml:Folder", ns):
         line_name = line_folder.find("kml:name", ns).text
         if not line_name or not line_name.upper().startswith("LINE"):
             continue
 
-        # cari distribution cable
+        # cari distribution cable di line ini
         cable = None
         for pm in line_folder.findall(".//kml:Placemark", ns):
             nm = (pm.find("kml:name", ns).text or "").upper()
             if "DISTRIBUTION CABLE" in nm:
                 cable = extract_geometry(pm)
 
-        # cari boundary
+        # cari boundary di line ini
         boundaries = []
         for pm in line_folder.findall(".//kml:Placemark", ns):
             nm = (pm.find("kml:name", ns).text or "").upper()
             if "BOUNDARY" in nm:
                 boundaries.append((nm, extract_geometry(pm)))
 
-        line_info[line_name.upper()] = {"cable": cable, "boundaries": boundaries}
-
-    # assign poles sesuai urutan global
-    for name, p in poles:
-        assigned = False
-        # cek line A-D
-        for line_name in result.keys():
-            info = line_info.get(line_name.upper())
-            if not info:
-                continue
-
-            # cek kabel
-            cable = info["cable"]
+        assigned = []
+        for name, p in poles:
+            ok = False
+            # cek ke kabel dulu
             if cable and isinstance(cable, LineString):
                 d = p.distance(cable)
-                if d <= DIST_THRESHOLD / 111320:  # deg → meter
-                    result[line_name]["POLE"].append((name, p))
-                    assigned = True
-                    break
+                if d <= DIST_THRESHOLD / 111320:  # approx degree to meter
+                    assigned.append((name, p, cable.project(p)))
+                    ok = True
+            # kalau tidak kena kabel, cek boundary
+            if not ok and boundaries:
+                for bname, boundary in boundaries:
+                    if isinstance(boundary, Polygon) and p.within(boundary):
+                        # contoh bname = "A01 BOUNDARY"
+                        line_key = bname[0].upper()  # huruf depannya A/B/C/D
+                        if line_key in line_name.upper():
+                            assigned.append((name, p, p.x))  # pakai X utk urut
+                            ok = True
+                            break
 
-            # kalau gagal, cek boundary
-            for bname, boundary in info["boundaries"]:
-                if isinstance(boundary, Polygon) and p.within(boundary):
-                    # validasi huruf A/B/C/D boundary vs line
-                    line_key = bname[0].upper()
-                    if line_key in line_name.upper():
-                        result[line_name]["POLE"].append((name, p))
-                        assigned = True
-                        break
-            if assigned:
-                break
+        # urutkan sesuai kabel kalau ada, kalau tidak pakai X
+        if cable and isinstance(cable, LineString):
+            assigned.sort(key=lambda x: x[2])
+        else:
+            assigned.sort(key=lambda x: x[2])
+
+        result[line_name] = {"POLE": assigned}
 
     return result
 
@@ -134,7 +128,7 @@ def export_kmz(classified, output_path, prefix="MR.OATKRP.P", padding=3):
         f_line = kml.newfolder(name=line_name)
         poles = content.get("POLE", [])
         f_pole = f_line.newfolder(name="POLE")
-        for i, (old_name, p) in enumerate(poles, 1):
+        for i, (old_name, p, _) in enumerate(poles, 1):
             new_name = f"{prefix}{str(i).zfill(padding)}"
             f_pole.newpoint(name=new_name, coords=[(p.x, p.y)])
     kml.savekmz(output_path)
