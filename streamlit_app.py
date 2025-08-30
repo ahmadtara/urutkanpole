@@ -30,7 +30,8 @@ def parse_kmz(kmz_file):
     with open(kml_file, "r", encoding="utf-8") as f:
         content = f.read()
 
-    for bad_ns in ["ns1:", "gx:", "atom:", "kml:"]:
+    # Hapus semua prefix namespace yang bikin error
+    for bad_ns in ["ns1:", "ns2:", "gx:", "atom:", "kml:"]:
         content = content.replace(bad_ns, "")
 
     fixed_file = kml_file + "_fixed.kml"
@@ -39,6 +40,7 @@ def parse_kmz(kmz_file):
 
     tree = ET.parse(fixed_file)
     return tree, tmpdir
+
 
 
 def extract_geometry(placemark):
