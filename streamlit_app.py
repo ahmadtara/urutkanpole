@@ -3,10 +3,11 @@ import zipfile
 import os
 import tempfile
 import simplekml
+import re  # <-- FIX lupa import
 from lxml import etree as ET
 from shapely.geometry import Point, LineString, Polygon
 
-DIST_THRESHOLD = 30  # meter
+DIST_THRESHOLD = 10  # meter
 
 def parse_kmz(kmz_path):
     """Extract KMZ ke folder sementara dan parse KML utama dengan cleaning"""
@@ -45,8 +46,6 @@ def parse_kmz(kmz_path):
         import xml.etree.ElementTree as ET_std
         tree = ET_std.ElementTree(ET_std.fromstring(xml_text))
         return tree, tmpdir
-
-
 
 def extract_geometry(pm):
     ns = {"kml": "http://www.opengis.net/kml/2.2"}
