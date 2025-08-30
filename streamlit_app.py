@@ -7,7 +7,7 @@ from lxml import etree as ET
 from shapely.geometry import Point, LineString, Polygon
 
 # Ambang batas jarak pole ke kabel (meter)
-DIST_THRESHOLD = 30  
+DIST_THRESHOLD = 10  
 
 
 def parse_kmz(kmz_file):
