@@ -9,19 +9,32 @@ from shapely.geometry import Point, LineString, Polygon
 DIST_THRESHOLD = 30  # meter
 
 def parse_kmz(kmz_path):
+    """Extract KMZ ke folder sementara dan parse KML utama"""
     tmpdir = tempfile.mkdtemp()
     with zipfile.ZipFile(kmz_path, 'r') as zf:
         zf.extractall(tmpdir)
+
+    # Cari file .kml
     kml_file = None
-    for root, _, files in os.walk(tmpdir):
+    for root, dirs, files in os.walk(tmpdir):
         for f in files:
             if f.endswith('.kml'):
                 kml_file = os.path.join(root, f)
                 break
     if not kml_file:
         raise FileNotFoundError("KML file tidak ditemukan dalam KMZ")
-    tree = ET.parse(kml_file)
-    return tree, tmpdir
+
+    # --- FIX: Baca isi KML & bersihkan namespace aneh ---
+    with open(kml_file, "r", encoding="utf-8") as f:
+        xml_text = f.read()
+
+    # hapus prefix ns2: atau namespace aneh lainnya
+    xml_text = xml_text.replace("ns2:", "").replace("gx:", "")
+
+    # parse lagi
+    tree = ET.fromstring(xml_text.encode("utf-8"))
+    return ET.ElementTree(tree), tmpdir
+
 
 def extract_geometry(pm):
     ns = {"kml": "http://www.opengis.net/kml/2.2"}
