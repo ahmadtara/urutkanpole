@@ -225,11 +225,15 @@ elif menu == "Urutkan POLE Global":
             st.stop()
         kml_file = os.path.join(extract_dir, kml_name)
 
-        # Parsing aman
+        # Parsing KML
         parser = ET.XMLParser(recover=True, encoding="utf-8")
         tree = ET.parse(kml_file, parser=parser)
         root = tree.getroot()
         ns = {"kml": "http://www.opengis.net/kml/2.2"}
+
+        # Input prefix manual
+        prefix = st.text_input("Prefix nama POLE", value="MR.PTSTP.P")
+        pad_width = st.number_input("Jumlah digit (contoh 3 → 001)", min_value=2, max_value=6, value=3, step=1)
 
         # Ambil Distribution Cable (LineString)
         cables = {}
@@ -245,7 +249,7 @@ elif menu == "Urutkan POLE Global":
                                   for x in coords_text.strip().split()]
                         cables[line_name] = LineString(coords)
 
-        # Ambil boundary (Polygon)
+        # Ambil Boundary (Polygon)
         boundaries = {}
         for folder in root.findall(".//kml:Folder", ns):
             fname = folder.find("kml:name", ns)
@@ -261,7 +265,7 @@ elif menu == "Urutkan POLE Global":
                                   for x in coords_text.strip().split()]
                         boundaries[line_name][pname.text] = Polygon(coords)
 
-        # Ambil POLE (titik) sesuai urutan global
+        # Ambil POLE (Point)
         poles = []
         for folder in root.findall(".//kml:Folder", ns):
             fname = folder.find("kml:name", ns)
@@ -305,7 +309,7 @@ elif menu == "Urutkan POLE Global":
             for pm in assignments[line]:
                 nm = pm.find("kml:name", ns)
                 if nm is not None:
-                    nm.text = f"POLE-{str(counter).zfill(3)}"
+                    nm.text = f"{prefix}{str(counter).zfill(int(pad_width))}"
                 line_folder.append(pm)
                 counter += 1
 
@@ -320,7 +324,6 @@ elif menu == "Urutkan POLE Global":
             st.download_button("📥 Download POLE Global", f,
                                file_name="poles_global.kmz",
                                mime="application/vnd.google-earth.kmz")
-
         # Unduhan
         with open(output_kmz, "rb") as f:
             st.download_button("📥 Download KMZ (NN sudah di-rename)", f,
