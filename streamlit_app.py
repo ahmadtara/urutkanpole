@@ -9,7 +9,7 @@ from shapely.geometry import Point, LineString, Polygon
 DIST_THRESHOLD = 30  # meter
 
 def parse_kmz(kmz_path):
-    """Extract KMZ ke folder sementara dan parse KML utama"""
+    """Extract KMZ ke folder sementara dan parse KML utama dengan cleaning"""
     tmpdir = tempfile.mkdtemp()
     with zipfile.ZipFile(kmz_path, 'r') as zf:
         zf.extractall(tmpdir)
@@ -24,16 +24,28 @@ def parse_kmz(kmz_path):
     if not kml_file:
         raise FileNotFoundError("KML file tidak ditemukan dalam KMZ")
 
-    # --- FIX: Baca isi KML & bersihkan namespace aneh ---
-    with open(kml_file, "r", encoding="utf-8") as f:
+    # --- FIX: Baca isi KML & bersihkan ---
+    with open(kml_file, "r", encoding="utf-8", errors="ignore") as f:
         xml_text = f.read()
 
-    # hapus prefix ns2: atau namespace aneh lainnya
-    xml_text = xml_text.replace("ns2:", "").replace("gx:", "")
+    # hapus prefix ns2:, gx:, dll
+    for bad in ["ns2:", "ns1:", "gx:", "kml:"]:
+        xml_text = xml_text.replace(bad, "")
 
-    # parse lagi
-    tree = ET.fromstring(xml_text.encode("utf-8"))
-    return ET.ElementTree(tree), tmpdir
+    # hapus deklarasi XML ganda (jaga-jaga)
+    xml_text = re.sub(r"<\?xml.*?\?>", "", xml_text)
+
+    # coba parse dengan lxml recover, fallback ke ElementTree
+    try:
+        parser = ET.XMLParser(recover=True)
+        tree = ET.fromstring(xml_text.encode("utf-8"), parser=parser)
+        return ET.ElementTree(tree), tmpdir
+    except Exception:
+        # fallback
+        import xml.etree.ElementTree as ET_std
+        tree = ET_std.ElementTree(ET_std.fromstring(xml_text))
+        return tree, tmpdir
+
 
 
 def extract_geometry(pm):
