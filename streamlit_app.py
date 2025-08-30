@@ -204,8 +204,6 @@ elif menu == "Rename NN di HP":
             z.write(new_kml, "doc.kml")
 
         # =========================
-# MENU 3: Urutkan POLE Global (A→D)
-# =========================
 elif menu == "Urutkan POLE Global":
     uploaded_file = st.file_uploader("Upload file KMZ", type=["kmz"])
     if uploaded_file is not None:
@@ -324,9 +322,3 @@ elif menu == "Urutkan POLE Global":
             st.download_button("📥 Download POLE Global", f,
                                file_name="poles_global.kmz",
                                mime="application/vnd.google-earth.kmz")
-        # Unduhan
-        with open(output_kmz, "rb") as f:
-            st.download_button("📥 Download KMZ (NN sudah di-rename)", f,
-                               file_name="NN_renamed.kmz",
-                               mime="application/vnd.google-earth.kmz")
-            
