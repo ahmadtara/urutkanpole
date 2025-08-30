@@ -9,10 +9,10 @@ from shapely.geometry import Point, LineString, Polygon
 # Ambang batas jarak pole ke kabel (meter)
 DIST_THRESHOLD = 30  
 
-def parse_kmz(kmz_path):
+def parse_kmz(kmz_file):
     """Extract KMZ ke folder sementara dan parse KML utama"""
     tmpdir = tempfile.mkdtemp()
-    with zipfile.ZipFile(kmz_path, 'r') as zf:
+    with zipfile.ZipFile(kmz_file, 'r') as zf:
         zf.extractall(tmpdir)
 
     # Cari file .kml
@@ -25,7 +25,7 @@ def parse_kmz(kmz_path):
     if not kml_file:
         raise FileNotFoundError("KML file tidak ditemukan dalam KMZ")
 
-    # Pakai recover=True agar namespace error diperbaiki
+    # Parse tanpa error namespace
     parser = ET.XMLParser(recover=True)
     tree = ET.parse(kml_file, parser=parser)
     return tree, tmpdir
@@ -143,31 +143,29 @@ def export_kmz(classified, output_path, prefix="MR.OATKRP.P", padding=3):
     kml.savekmz(output_path)
 
 
-# ========================
+# ================================
 # STREAMLIT APP
-# ========================
-st.title("🚧 Urutkan POLE ke Line dari KMZ")
+# ================================
+st.title("📍 Urutkan POLE ke LINE dari KMZ")
 
-uploaded = st.file_uploader("Upload file KMZ", type=["kmz"])
+uploaded_file = st.file_uploader("Upload file KMZ", type=["kmz"])
 
-if uploaded is not None:
+if uploaded_file is not None:
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".kmz") as tmpfile:
-            tmpfile.write(uploaded.read())
-            tmp_kmz = tmpfile.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".kmz") as tmp_kmz:
+            tmp_kmz.write(uploaded_file.read())
+            tmp_kmz_path = tmp_kmz.name
 
         with st.spinner("🔍 Memproses file KMZ..."):
-            tree, _ = parse_kmz(tmp_kmz)
+            tree, _ = parse_kmz(tmp_kmz_path)
             classified = classify_poles(tree)
 
-        st.success("✅ POLE berhasil diklasifikasikan")
-
-        # Simpan hasil ke KMZ baru
-        out_path = tmp_kmz.replace(".kmz", "_POLE_LINE.kmz")
-        export_kmz(classified, out_path)
+            out_path = tempfile.mktemp(suffix=".kmz")
+            export_kmz(classified, out_path)
 
         with open(out_path, "rb") as f:
-            st.download_button("⬇️ Download KMZ hasil", f, file_name="POLE_PER_LINE.kmz")
+            st.success("✅ Proses selesai! Silakan download hasilnya.")
+            st.download_button("⬇️ Download KMZ hasil", f, file_name="POLE_per_LINE.kmz")
 
     except Exception as e:
         st.error(f"❌ Error: {e}")
