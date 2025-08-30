@@ -2,10 +2,15 @@ import os
 import zipfile
 import tempfile
 import xml.etree.ElementTree as ET
+import streamlit as st
 from shapely.geometry import Point, LineString, Polygon
 
 DIST_THRESHOLD = 5  # meter, batas jarak pole ke kabel
 
+
+# =====================
+# FUNGSI BANTUAN
+# =====================
 def extract_geometry(pm):
     ns = {"kml": "http://www.opengis.net/kml/2.2"}
     point = pm.find(".//kml:Point/kml:coordinates", ns)
@@ -30,6 +35,7 @@ def extract_geometry(pm):
         return Polygon(parse_coords(polygon.text))
     return None
 
+
 def export_kmz(result, output_path, prefix="POLE"):
     import simplekml
     kml = simplekml.Kml()
@@ -51,6 +57,15 @@ def export_kmz(result, output_path, prefix="POLE"):
         zf.write(tmp_kml, os.path.basename(tmp_kml))
     os.remove(tmp_kml)
 
+
+# =====================
+# STREAMLIT APP
+# =====================
+st.set_page_config(page_title="Urutkan POLE ke Line", page_icon="📍")
+
+menu = ["Urutkan POLE ke Line"]
+selected_menu = st.sidebar.radio("Pilih Menu", menu)
+
 if selected_menu == "Urutkan POLE ke Line":
     st.header("📍 Urutkan POLE ke Line")
     uploaded_file = st.file_uploader("Upload file KMZ", type=["kmz"])
@@ -61,7 +76,7 @@ if selected_menu == "Urutkan POLE ke Line":
         with open(tmp_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        if st.button("Proses"):
+        if st.button("🚀 Proses"):
             try:
                 # Ekstrak KMZ → ambil KML
                 extract_dir = tempfile.mkdtemp()
