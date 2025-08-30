@@ -4,6 +4,7 @@ import tempfile
 import simplekml
 from lxml import etree as ET
 from shapely.geometry import Point, LineString, Polygon
+import streamlit as st
 
 # Ambang batas jarak pole ke kabel (meter)
 DIST_THRESHOLD = 30  
@@ -152,11 +153,30 @@ def export_kmz(classified, output_path, prefix="MR.OATKRP.P", padding=3):
     kml.savekmz(output_path)
 
 
-# ----------------
-# CONTOH PEMAKAIAN
-# ----------------
-if __name__ == "__main__":
-    tree, _ = parse_kmz("PKB001962.kmz")  # ganti path ke file KMZ Anda
-    classified = classify_poles(tree)
-    export_kmz(classified, "output_pole_per_line.kmz")
-    print("Selesai ✔")
+# ==============================
+# STREAMLIT APP
+# ==============================
+st.title("📍 Urutkan POLE ke Line dari KMZ")
+
+uploaded_file = st.file_uploader("Upload file KMZ", type="kmz")
+
+if uploaded_file is not None:
+    with st.spinner("🔍 Memproses KMZ..."):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".kmz") as tmp:
+            tmp.write(uploaded_file.read())
+            kmz_path = tmp.name
+
+        try:
+            tree, _ = parse_kmz(kmz_path)
+            classified = classify_poles(tree)
+
+            output_path = "output_pole_per_line.kmz"
+            export_kmz(classified, output_path)
+
+            st.success("✅ Selesai! File siap diunduh")
+
+            with open(output_path, "rb") as f:
+                st.download_button("⬇️ Download hasil KMZ", f, file_name="output_pole_per_line.kmz")
+
+        except Exception as e:
+            st.error(f"❌ Error: {e}")
