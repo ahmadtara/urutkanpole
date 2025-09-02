@@ -282,7 +282,7 @@ elif menu == "Urutkan POLE Global":
             assigned_line = None
             # cek distribution cable terdekat
             for line_name, cable in cables.items():
-                if cable.distance(pt) < 0.0001:  # threshold ~30m
+                if cable.distance(pt) < 0.0003:  # threshold ~30m
                     assigned_line = line_name
                     break
             # fallback ke boundary
