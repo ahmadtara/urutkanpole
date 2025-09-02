@@ -2,19 +2,26 @@ import os
 import zipfile
 import tempfile
 import streamlit as st
-from shapely.ops import unary_union
-from shapely.geometry import Point, LineString, Polygon
+from shapely.geometry import Point, Polygon
 from lxml import etree as ET
-import simplekml
-# Ambang batas jarak pole ke kabel (meter)
+import re
 
+# ✅ Fungsi untuk membersihkan tag gx:, ns1:, dll.
+def clean_invalid_tags(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    content = re.sub(r"<(/?)(gx|ns1):[^>]+>", "", content)
+    content = re.sub(r"\s+(gx|ns1):[^=]+=\"[^\"]*\"", "", content)
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+# Ambang batas jarak pole ke kabel (meter)
 st.title("📌 KMZ Tools")
 
 menu = st.sidebar.radio("Pilih Menu", [
     "Rapikan HP ke Boundary",
     "Rename NN di HP",   
     "Urutkan POLE Global"
-  
 ])
 
 # =========================
@@ -40,6 +47,9 @@ if menu == "Rapikan HP ke Boundary":
             st.error("❌ Tidak ada file .kml di dalam KMZ")
         else:
             kml_file = os.path.join(extract_dir, kml_name)
+
+            # ✅ Bersihkan tag tidak valid sebelum parsing
+            clean_invalid_tags(kml_file)
 
             parser = ET.XMLParser(recover=True, encoding="utf-8")
             tree = ET.parse(kml_file, parser=parser)
@@ -119,91 +129,6 @@ if menu == "Rapikan HP ke Boundary":
                 st.download_button("📥 Download KMZ Hasil", f, "output.kmz",
                                    mime="application/vnd.google-earth.kmz")
 
-# ====== MENU 3: Rename NN di folder HP ======
-elif menu == "Rename NN di HP":
-    st.subheader("🔤 Ubah nama NN → NN-01, NN-02, ... di folder HP")
-
-    uploaded_file = st.file_uploader("Upload file KML/KMZ", type=["kml", "kmz"])
-    start_num = st.number_input("Nomor awal", min_value=1, value=1, step=1)
-    pad_width = st.number_input("Jumlah digit (padding)", min_value=1, value=2, step=1)
-    prefix = st.text_input("Prefix yang dicari", value="NN")
-
-    if uploaded_file is not None:
-        # Simpan sementara
-        import tempfile, os, zipfile
-        from lxml import etree as ET
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[-1]) as tmp:
-            tmp.write(uploaded_file.read())
-            file_path = tmp.name
-
-        # Jika KMZ → ekstrak KML
-        extract_dir = tempfile.mkdtemp()
-        if file_path.lower().endswith(".kmz"):
-            with zipfile.ZipFile(file_path, 'r') as z:
-                z.extractall(extract_dir)
-                files = z.namelist()
-                kml_name = next((f for f in files if f.lower().endswith(".kml")), None)
-                if not kml_name:
-                    st.error("❌ Tidak ada file .kml di dalam KMZ.")
-                    st.stop()
-                kml_file = os.path.join(extract_dir, kml_name)
-        else:
-            # KML langsung
-            kml_file = file_path
-
-        # Parse KML dengan lxml (lebih toleran)
-        parser = ET.XMLParser(recover=True, encoding="utf-8")
-        
-        tree = ET.parse(kml_file, parser=parser)
-        root = tree.getroot()
-        ns = {"kml": "http://www.opengis.net/kml/2.2"}
-
-        # Cari folder HP
-        def find_folder_by_name(el, name):
-            for f in el.findall(".//kml:Folder", ns):
-                n = f.find("kml:name", ns)
-                if n is not None and (n.text or "").strip() == name:
-                    return f
-            return None
-
-        hp_folder = find_folder_by_name(root, "HP")
-        if hp_folder is None:
-            st.error("❌ Folder 'HP' tidak ditemukan di KML/KMZ.")
-            st.stop()
-
-        # Kumpulkan placemark NN
-        nn_placemarks = []
-        for pm in hp_folder.findall("kml:Placemark", ns):
-            nm = pm.find("kml:name", ns)
-            if nm is None:
-                continue
-            text = (nm.text or "").strip()
-            # cocokkan yang diawali prefix (NN, NN-xx, NN xx, dsb)
-            if text.upper().startswith(prefix.upper()):
-                nn_placemarks.append(nm)
-
-        if not nn_placemarks:
-            st.warning("Tidak ada Placemark berawalan 'NN' di folder HP.")
-            st.stop()
-
-        # Rename berurutan sesuai urutan di file
-        counter = int(start_num)
-        for nm in nn_placemarks:
-            nm.text = f"{prefix}-{str(counter).zfill(int(pad_width))}"
-            counter += 1
-
-        # Tulis ulang KML
-        out_dir = tempfile.mkdtemp()
-        new_kml = os.path.join(out_dir, "renamed.kml")
-        tree.write(new_kml, encoding="utf-8", xml_declaration=True)
-
-        # Jika asalnya KMZ → buat KMZ baru; kalau KML → tetap bisa kasih KMZ juga
-        output_kmz = os.path.join(out_dir, "renamed.kmz")
-        with zipfile.ZipFile(output_kmz, "w", zipfile.ZIP_DEFLATED) as z:
-            z.write(new_kml, "doc.kml")
-
-        # =========================
 
 elif menu == "Urutkan POLE Global":
     uploaded_file = st.file_uploader("Upload file KMZ", type=["kmz"])
