@@ -1,139 +1,91 @@
-import os
-import zipfile
-import tempfile
-import xml.etree.ElementTree as ET
 import streamlit as st
+import zipfile
+import os
+from xml.etree import ElementTree as ET
 
-# Hapus prefix ns supaya bersih
-def clean_namespace(tree):
-    for elem in tree.iter():
-        if '}' in elem.tag:
-            elem.tag = elem.tag.split('}', 1)[1]
-    return tree
+st.set_page_config(page_title="KMZ Rapikan", layout="wide")
 
-# Fungsi untuk rapikan HP dan POLE ke boundary
-def process_hp_pole(kmz_file):
-    with zipfile.ZipFile(kmz_file, 'r') as kmz:
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            kmz.extractall(tmpdirname)
-            kml_path = None
-            for root, _, files in os.walk(tmpdirname):
-                for f in files:
-                    if f.endswith(".kml"):
-                        kml_path = os.path.join(root, f)
-                        break
-            if not kml_path:
-                st.error("KML file tidak ditemukan di dalam KMZ")
-                return None
+def extract_kml_from_kmz(uploaded_file):
+    with zipfile.ZipFile(uploaded_file, "r") as zf:
+        for name in zf.namelist():
+            if name.endswith(".kml"):
+                return zf.read(name)
+    return None
 
-            tree = ET.parse(kml_path)
-            root = tree.getroot()
-            tree = clean_namespace(tree)
+def save_kmz(kml_str, output_kmz="hasil_gabungan.kmz"):
+    # simpan doc.kml sementara
+    with open("doc.kml", "wb") as f:
+        f.write(kml_str.encode("utf-8"))
+    # bungkus jadi KMZ
+    with zipfile.ZipFile(output_kmz, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write("doc.kml", "doc.kml")
+    os.remove("doc.kml")
+    return output_kmz
 
-            document = root.find("Document")
+# ==========================
+# Menu
+# ==========================
+menu = st.sidebar.radio("Menu", [
+    "Rapikan HP ke Boundary & Urutkan POLE Global",
+    "Rename NN di HP"
+])
 
+uploaded_file = st.file_uploader("Upload file KMZ", type=["kmz"])
+
+if uploaded_file:
+    kml_bytes = extract_kml_from_kmz(uploaded_file)
+    if kml_bytes is None:
+        st.error("KML tidak ditemukan di dalam KMZ")
+    else:
+        root = ET.fromstring(kml_bytes)
+
+        if menu == "Rapikan HP ke Boundary & Urutkan POLE Global":
             # Buat folder hasil
-            hp_covers = {x: ET.Element("Folder") for x in ["A", "B", "C", "D"]}
-            pole_lines = {x: ET.Element("Folder") for x in ["A", "B", "C", "D"]}
+            kml_doc = ET.Element("kml", xmlns="http://www.opengis.net/kml/2.2")
+            document = ET.SubElement(kml_doc, "Document")
 
-            for k, v in hp_covers.items():
-                name = ET.SubElement(v, "name")
-                name.text = f"HP COVER {k}"
+            # Folder HP Cover A–D
+            hp_folders = {ch: ET.SubElement(document, "Folder") for ch in ["A", "B", "C", "D"]}
+            for ch in hp_folders:
+                ET.SubElement(hp_folders[ch], "name").text = f"HP COVER {ch}"
 
-            for k, v in pole_lines.items():
-                name = ET.SubElement(v, "name")
-                name.text = f"LINE {k}"
+            # Folder LINE A–D
+            line_folders = {ch: ET.SubElement(document, "Folder") for ch in ["A", "B", "C", "D"]}
+            for ch in line_folders:
+                ET.SubElement(line_folders[ch], "name").text = f"LINE {ch}"
 
-            # Cari folder HP
-            for folder in document.findall("Folder"):
-                fname = folder.find("name")
-                if fname is not None and fname.text.upper() == "HP":
-                    for pm in folder.findall("Placemark"):
-                        # sementara random assign ke A
-                        hp_covers["A"].append(pm)
+            # Masukkan placemark sesuai nama folder sumber
+            for pm in root.findall(".//{http://www.opengis.net/kml/2.2}Placemark"):
+                parent = pm.find("../{http://www.opengis.net/kml/2.2}name")
+                if parent is not None:
+                    pname = parent.text.upper()
+                    if "HP" in pname:
+                        # contoh logika assign
+                        hp_folders["A"].append(pm)
+                    elif "POLE" in pname:
+                        line_folders["A"].append(pm)
 
-                if fname is not None and fname.text.upper() == "POLE":
-                    for pm in folder.findall("Placemark"):
-                        # sementara random assign ke A
-                        pole_lines["A"].append(pm)
+            # Simpan ke KMZ
+            kml_str = ET.tostring(kml_doc, encoding="utf-8", xml_declaration=True).decode("utf-8")
+            result = save_kmz(kml_str)
 
-            # Bersihkan document lama → masukkan hasil
-            for f in list(document):
-                document.remove(f)
-
-            for v in hp_covers.values():
-                document.append(v)
-
-            for v in pole_lines.values():
-                document.append(v)
-
-            # Simpan KML hasil
-            output_kml = os.path.join(tmpdirname, "doc.kml")
-            tree.write(output_kml, encoding="utf-8", xml_declaration=True)
-
-            # Kompres jadi KMZ
-            output_kmz = os.path.join(tmpdirname, "hasil_gabungan.kmz")
-            with zipfile.ZipFile(output_kmz, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                zf.write(output_kml, "doc.kml")
-
-            return output_kmz
-
-# Fungsi rename NN di HP
-def rename_nn(kmz_file):
-    with zipfile.ZipFile(kmz_file, 'r') as kmz:
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            kmz.extractall(tmpdirname)
-            kml_path = None
-            for root, _, files in os.walk(tmpdirname):
-                for f in files:
-                    if f.endswith(".kml"):
-                        kml_path = os.path.join(root, f)
-                        break
-            if not kml_path:
-                st.error("KML file tidak ditemukan di dalam KMZ")
-                return None
-
-            tree = ET.parse(kml_path)
-            root = tree.getroot()
-            tree = clean_namespace(tree)
-            document = root.find("Document")
-
-            counter = 1
-            for folder in document.findall("Folder"):
-                fname = folder.find("name")
-                if fname is not None and fname.text.upper() == "HP":
-                    for pm in folder.findall("Placemark"):
-                        name_tag = pm.find("name")
-                        if name_tag is not None and name_tag.text.startswith("NN"):
-                            name_tag.text = f"HP{counter:02d}"
-                            counter += 1
-
-            # Simpan hasil
-            output_kml = os.path.join(tmpdirname, "doc.kml")
-            tree.write(output_kml, encoding="utf-8", xml_declaration=True)
-
-            output_kmz = os.path.join(tmpdirname, "hasil_rename.kmz")
-            with zipfile.ZipFile(output_kmz, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                zf.write(output_kml, "doc.kml")
-
-            return output_kmz
-
-# Streamlit UI
-st.title("KMZ Processor")
-
-menu = st.sidebar.radio("Pilih Menu", ["Gabungan (HP + POLE)", "Rename NN di HP"])
-
-uploaded_file = st.file_uploader("Upload KMZ", type=["kmz"])
-
-if uploaded_file is not None:
-    if menu == "Gabungan (HP + POLE)":
-        result = process_hp_pole(uploaded_file)
-        if result:
+            # Download
             with open(result, "rb") as f:
-                st.download_button("Download hasil_gabungan.kmz", f, file_name="hasil_gabungan.kmz")
+                st.download_button("Download Hasil Gabungan", f, file_name=result,
+                                   mime="application/vnd.google-earth.kmz")
 
-    elif menu == "Rename NN di HP":
-        result = rename_nn(uploaded_file)
-        if result:
+        elif menu == "Rename NN di HP":
+            # Contoh rename sederhana
+            count = 1
+            for pm in root.findall(".//{http://www.opengis.net/kml/2.2}Placemark"):
+                name_tag = pm.find("{http://www.opengis.net/kml/2.2}name")
+                if name_tag is not None and name_tag.text.startswith("NN"):
+                    name_tag.text = f"HP-{count:03d}"
+                    count += 1
+
+            kml_str = ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+            result = save_kmz(kml_str, "hasil_rename.kmz")
+
             with open(result, "rb") as f:
-                st.download_button("Download hasil_rename.kmz", f, file_name="hasil_rename.kmz")
+                st.download_button("Download Hasil Rename", f, file_name=result,
+                                   mime="application/vnd.google-earth.kmz")
