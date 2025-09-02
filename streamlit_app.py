@@ -2,7 +2,7 @@ import os
 import zipfile
 import tempfile
 import streamlit as st
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point, Polygon, LineString
 from lxml import etree as ET
 import re
 
