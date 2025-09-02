@@ -204,6 +204,8 @@ elif menu == "Rename NN di HP":
             z.write(new_kml, "doc.kml")
 
         # =========================
+# MENU 3: Urutkan POLE Global (A→D)
+# =========================
 elif menu == "Urutkan POLE Global":
     uploaded_file = st.file_uploader("Upload file KMZ", type=["kmz"])
     if uploaded_file is not None:
@@ -223,15 +225,11 @@ elif menu == "Urutkan POLE Global":
             st.stop()
         kml_file = os.path.join(extract_dir, kml_name)
 
-        # Parsing KML
+        # Parsing aman
         parser = ET.XMLParser(recover=True, encoding="utf-8")
         tree = ET.parse(kml_file, parser=parser)
         root = tree.getroot()
         ns = {"kml": "http://www.opengis.net/kml/2.2"}
-
-        # Input prefix manual
-        prefix = st.text_input("Prefix nama POLE", value="MR.PTSTP.P")
-        pad_width = st.number_input("Jumlah digit (contoh 3 → 001)", min_value=2, max_value=6, value=3, step=1)
 
         # Ambil Distribution Cable (LineString)
         cables = {}
@@ -247,7 +245,7 @@ elif menu == "Urutkan POLE Global":
                                   for x in coords_text.strip().split()]
                         cables[line_name] = LineString(coords)
 
-        # Ambil Boundary (Polygon)
+        # Ambil boundary (Polygon)
         boundaries = {}
         for folder in root.findall(".//kml:Folder", ns):
             fname = folder.find("kml:name", ns)
@@ -263,7 +261,7 @@ elif menu == "Urutkan POLE Global":
                                   for x in coords_text.strip().split()]
                         boundaries[line_name][pname.text] = Polygon(coords)
 
-        # Ambil POLE (Point)
+        # Ambil POLE (titik) sesuai urutan global
         poles = []
         for folder in root.findall(".//kml:Folder", ns):
             fname = folder.find("kml:name", ns)
@@ -307,7 +305,7 @@ elif menu == "Urutkan POLE Global":
             for pm in assignments[line]:
                 nm = pm.find("kml:name", ns)
                 if nm is not None:
-                    nm.text = f"{prefix}{str(counter).zfill(int(pad_width))}"
+                    nm.text = f"POLE-{str(counter).zfill(3)}"
                 line_folder.append(pm)
                 counter += 1
 
@@ -322,3 +320,10 @@ elif menu == "Urutkan POLE Global":
             st.download_button("📥 Download POLE Global", f,
                                file_name="poles_global.kmz",
                                mime="application/vnd.google-earth.kmz")
+
+        # Unduhan
+        with open(output_kmz, "rb") as f:
+            st.download_button("📥 Download KMZ (NN sudah di-rename)", f,
+                               file_name="NN_renamed.kmz",
+                               mime="application/vnd.google-earth.kmz")
+            
