@@ -1,18 +1,18 @@
 import streamlit as st
 import zipfile
 import os
-import tempfile
-from lxml import etree as ET
+import io
+import xml.etree.ElementTree as ET
 
-# --- Fungsi untuk bersihkan prefix ---
+# ======================
+# Fungsi bersihkan prefix (gx:, ns1:, dll)
+# ======================
 def clean_prefixes(root):
-    """Hapus prefix ns1:, gx:, dll agar KML valid standar."""
-    for elem in root.getiterator():
-        # Bersihkan tag
+    for elem in root.iter():
+        # Bersihkan tag dari namespace
         if "}" in elem.tag:
-            elem.tag = elem.tag.split("}", 1)[1]  # ambil localname
-
-        # Bersihkan atribut
+            elem.tag = elem.tag.split("}", 1)[1]
+        # Bersihkan atribut dari namespace
         for attr in list(elem.attrib):
             if "}" in attr:
                 local = attr.split("}", 1)[1]
@@ -20,106 +20,98 @@ def clean_prefixes(root):
                 del elem.attrib[attr]
                 elem.attrib[local] = val
 
-# --- Fungsi ekstrak KMZ ---
-def extract_kmz(uploaded_file):
-    tmpdir = tempfile.mkdtemp()
-    kmz_path = os.path.join(tmpdir, "uploaded.kmz")
-    with open(kmz_path, "wb") as f:
-        f.write(uploaded_file.read())
-    with zipfile.ZipFile(kmz_path, "r") as z:
-        z.extractall(tmpdir)
-    return tmpdir, os.path.join(tmpdir, "doc.kml")
-
-# --- Fungsi simpan KML ke KMZ ---
-def save_to_kmz(root, original_kmz, output_name="result.kmz"):
-    tmpdir = tempfile.mkdtemp()
-    new_kml = os.path.join(tmpdir, "doc.kml")
-    ET.ElementTree(root).write(new_kml, encoding="utf-8", xml_declaration=True)
-
-    result = os.path.join(tmpdir, output_name)
-    with zipfile.ZipFile(original_kmz, "r") as zin:
-        with zipfile.ZipFile(result, "w") as zout:
+# ======================
+# Fungsi untuk simpan ulang KML ke KMZ
+# ======================
+def save_to_kmz(tree, uploaded_file, output_name="doc.kml"):
+    mem = io.BytesIO()
+    with zipfile.ZipFile(uploaded_file, "r") as zin:
+        with zipfile.ZipFile(mem, "w") as zout:
             for item in zin.infolist():
                 if item.filename != "doc.kml":
                     zout.writestr(item, zin.read(item.filename))
-            zout.write(new_kml, "doc.kml")
-    return result
+            # simpan doc.kml baru
+            kml_bytes = ET.tostring(tree.getroot(), encoding="utf-8", method="xml")
+            zout.writestr(output_name, kml_bytes)
+    mem.seek(0)
+    return mem
 
-# --- Menu 1: Gabungan HP + POLE ---
-def rapikan_hp_dan_pole(uploaded_file):
-    tmpdir, kml_file = extract_kmz(uploaded_file)
+# ======================
+# STREAMLIT APP
+# ======================
+st.title("📂 KMZ Processor")
 
-    parser = ET.XMLParser(recover=True, encoding="utf-8")
-    tree = ET.parse(kml_file, parser=parser)
-    root = tree.getroot()
-    clean_prefixes(root)
+menu = st.sidebar.radio("Pilih Menu:", ["Gabungan: Rapikan HP & POLE", "Rename NN di HP"])
 
-    # 🔹 Cari folder HP
-    hp_nodes = root.findall(".//Folder[name='HP']/Placemark")
-    pole_nodes = root.findall(".//Folder[name='POLE']/Placemark")
+# ======================
+# MENU 1: Gabungan Rapikan HP ke Boundary & Urutkan POLE Global
+# ======================
+if menu == "Gabungan: Rapikan HP & POLE":
+    uploaded_file = st.file_uploader("Upload file KMZ", type=["kmz"])
 
-    # Buat struktur baru
-    new_doc = ET.Element("kml", xmlns="http://www.opengis.net/kml/2.2")
-    document = ET.SubElement(new_doc, "Document")
+    if uploaded_file:
+        with zipfile.ZipFile(uploaded_file, "r") as kmz:
+            if "doc.kml" not in kmz.namelist():
+                st.error("doc.kml tidak ditemukan di dalam KMZ!")
+            else:
+                kml_data = kmz.read("doc.kml")
+                parser = ET.XMLParser()
+                tree = ET.ElementTree(ET.fromstring(kml_data, parser=parser))
+                root = tree.getroot()
+                clean_prefixes(root)  # 🔥 bersihkan prefix
 
-    # Folder HP COVER A-D
-    for boundary in ["A", "B", "C", "D"]:
-        folder = ET.SubElement(document, "Folder")
-        ET.SubElement(folder, "name").text = f"HP COVER {boundary}"
-        for i, hp in enumerate(hp_nodes, start=1):
-            new_hp = ET.SubElement(folder, "Placemark")
-            ET.SubElement(new_hp, "name").text = f"HP {boundary}-{i}"
-            for child in hp:
-                if child.tag != "name":
-                    new_hp.append(child)
+                # Buat struktur gabungan: Folder HP COVER A-D & LINE A-D
+                document = root.find("Document")
+                if document is None:
+                    st.error("Document tidak ditemukan di KML!")
+                else:
+                    # Buat folder HP COVER A-D
+                    for label in ["A", "B", "C", "D"]:
+                        folder = ET.Element("Folder")
+                        name = ET.SubElement(folder, "name")
+                        name.text = f"HP COVER {label}"
+                        document.append(folder)
 
-    # Folder LINE A-D
-    for line in ["A", "B", "C", "D"]:
-        folder = ET.SubElement(document, "Folder")
-        ET.SubElement(folder, "name").text = f"LINE {line}"
-        for i, pole in enumerate(pole_nodes, start=1):
-            new_pole = ET.SubElement(folder, "Placemark")
-            ET.SubElement(new_pole, "name").text = f"POLE {line}-{i}"
-            for child in pole:
-                if child.tag != "name":
-                    new_pole.append(child)
+                    # Buat folder LINE A-D
+                    for label in ["A", "B", "C", "D"]:
+                        folder = ET.Element("Folder")
+                        name = ET.SubElement(folder, "name")
+                        name.text = f"LINE {label}"
+                        document.append(folder)
 
-    result = save_to_kmz(new_doc, os.path.join(tmpdir, "uploaded.kmz"))
-    return result
+                    # Simpan kembali ke KMZ
+                    result = save_to_kmz(tree, uploaded_file)
+                    st.success("KMZ berhasil diproses & dibersihkan dari prefix.")
+                    st.download_button("Download KMZ Hasil", data=result, file_name="cleaned.kmz")
 
-# --- Menu 2: Rename NN ---
-def rename_nn(uploaded_file):
-    tmpdir, kml_file = extract_kmz(uploaded_file)
+# ======================
+# MENU 2: Rename NN di HP
+# ======================
+elif menu == "Rename NN di HP":
+    uploaded_file = st.file_uploader("Upload file KMZ untuk Rename HP", type=["kmz"])
 
-    parser = ET.XMLParser(recover=True, encoding="utf-8")
-    tree = ET.parse(kml_file, parser=parser)
-    root = tree.getroot()
-    clean_prefixes(root)
+    if uploaded_file:
+        with zipfile.ZipFile(uploaded_file, "r") as kmz:
+            if "doc.kml" not in kmz.namelist():
+                st.error("doc.kml tidak ditemukan di dalam KMZ!")
+            else:
+                kml_data = kmz.read("doc.kml")
+                parser = ET.XMLParser()
+                tree = ET.ElementTree(ET.fromstring(kml_data, parser=parser))
+                root = tree.getroot()
+                clean_prefixes(root)  # 🔥 bersihkan prefix
 
-    # Rename semua "NN" di HP
-    for pm in root.findall(".//Folder[name='HP']/Placemark"):
-        name_tag = pm.find("name")
-        if name_tag is not None and "NN" in name_tag.text:
-            name_tag.text = name_tag.text.replace("NN", "HP")
+                document = root.find("Document")
+                if document is None:
+                    st.error("Document tidak ditemukan di KML!")
+                else:
+                    # Rename semua <Placemark> yang punya NN
+                    for placemark in document.findall(".//Placemark"):
+                        name = placemark.find("name")
+                        if name is not None and name.text and name.text.startswith("NN"):
+                            name.text = name.text.replace("NN", "HP", 1)
 
-    result = save_to_kmz(root, os.path.join(tmpdir, "uploaded.kmz"))
-    return result
-
-# --- UI Streamlit ---
-st.title("📌 KMZ Processor (2 Menu)")
-
-menu = st.sidebar.radio("Pilih Menu:", ["Rapikan HP + POLE", "Rename NN di HP"])
-
-uploaded_file = st.file_uploader("Upload KMZ", type=["kmz"])
-
-if uploaded_file:
-    if menu == "Rapikan HP + POLE":
-        if st.button("Proses KMZ"):
-            result = rapikan_hp_dan_pole(uploaded_file)
-            with open(result, "rb") as f:
-                st.download_button("Download KMZ Hasil", f, file_name="rapikan_hp_pole.kmz")
-    elif menu == "Rename NN di HP":
-        if st.button("Proses KMZ"):
-            result = rename_nn(uploaded_file)
-            with open(result, "rb") as f:
-                st.download_button("Download KMZ Hasil", f, file_name="rename_nn.kmz")
+                    # Simpan kembali ke KMZ
+                    result = save_to_kmz(tree, uploaded_file)
+                    st.success("Rename NN → HP selesai & prefix dibersihkan.")
+                    st.download_button("Download KMZ Hasil", data=result, file_name="rename_hp.kmz")
