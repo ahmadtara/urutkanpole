@@ -6,22 +6,40 @@ from shapely.geometry import Point, Polygon, LineString
 from lxml import etree as ET
 import re
 
-# ✅ Fungsi untuk membersihkan tag gx:, ns1:, dll.
+import re
+
+# ✅ Fungsi untuk membersihkan tag/namespace asing di KML
 def clean_invalid_tags(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # Hapus tag dengan prefix tidak valid (gx:, ns1:, dll.)
-    content = re.sub(r"<(/?)(gx|ns1):[^>]+>", "", content)
+    # --- Step 1: Bersihkan gx: dan ns1: (yang paling sering bikin error) ---
+    content = re.sub(r"<(/?)(gx|ns1):[^>]+>", "", content)  # tag <gx:..> atau <ns1:..>
+    content = re.sub(r"\s+(gx|ns1):[^=]+=\"[^\"]*\"", "", content)  # atribut gx:..= atau ns1:..=
+    content = re.sub(r"\s+xmlns:(gx|ns1)=\"[^\"]*\"", "", content)  # deklarasi xmlns:gx / xmlns:ns1
 
-    # Hapus atribut dengan prefix tidak valid
-    content = re.sub(r"\s+(gx|ns1):[^=]+=\"[^\"]*\"", "", content)
-
-    # Hapus deklarasi xmlns:gx, xmlns:ns1, dll.
-    content = re.sub(r"\s+xmlns:(gx|ns1)=\"[^\"]*\"", "", content)
+    # --- Step 2: Bersihkan prefix asing lain yang masih lolos ---
+    # Hapus prefix di nama tag → <abc:Tag> → <Tag>
+    content = re.sub(r"</?\w+?:", "<", content)
+    # Hapus deklarasi xmlns yang tidak dikenal
+    content = re.sub(r"\s+xmlns:\w+=\"[^\"]*\"", "", content)
 
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
+
+
+def clean_invalid_tags(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
+        xml = f.read()
+
+    # Hapus prefix asing <gx:Track> → <Track>
+    xml = re.sub(r"</?\w+?:", "<", xml)
+
+    # Hapus deklarasi xmlns asing
+    xml = re.sub(r"xmlns:\w+=\"[^\"]+\"", "", xml)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(xml)
 
 # ==============================
 # STREAMLIT APP
@@ -214,6 +232,7 @@ elif menu == "Rename NN di HP":
 # =========================
 # MENU 3: Urutkan POLE Global
 # =========================
+# =========================
 elif menu == "Urutkan POLE Global":
     uploaded_file = st.file_uploader("Upload file KMZ", type=["kmz"])
     if uploaded_file is not None:
@@ -236,7 +255,7 @@ elif menu == "Urutkan POLE Global":
         # ✅ Bersihkan sebelum parsing
         clean_invalid_tags(kml_file)
 
-        parser = ET.XMLParser(recover=True, encoding="utf-8")
+        parser = ET.XMLParser()
         tree = ET.parse(kml_file, parser=parser)
         root = tree.getroot()
         ns = {"kml": "http://www.opengis.net/kml/2.2"}
@@ -335,6 +354,4 @@ elif menu == "Urutkan POLE Global":
             z.write(new_kml, "doc.kml")
 
         with open(output_kmz, "rb") as f:
-            st.download_button("📥 Download POLE Global", f,
-                               file_name="poles_global.kmz",
-                               mime="application/vnd.google-earth.kmz")
+            st.download_button("📥 Download POLE Global", f, file_name="poles_global.kmz")
