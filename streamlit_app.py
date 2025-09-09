@@ -28,18 +28,18 @@ def clean_invalid_tags(file_path):
         f.write(content)
 
 
-def clean_invalid_tags(file_path):
-    with open(file_path, "r", encoding="utf-8") as f:
-        xml = f.read()
+# def clean_invalid_tags(file_path):
+ #    with open(file_path, "r", encoding="utf-8") as f:
+    #     xml = f.read()
 
     # Hapus prefix asing <gx:Track> → <Track>
-    xml = re.sub(r"</?\w+?:", "<", xml)
+ #    xml = re.sub(r"</?\w+?:", "<", xml)
 
     # Hapus deklarasi xmlns asing
-    xml = re.sub(r"xmlns:\w+=\"[^\"]+\"", "", xml)
+  #   xml = re.sub(r"xmlns:\w+=\"[^\"]+\"", "", xml)
 
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(xml)
+ #    with open(file_path, "w", encoding="utf-8") as f:
+     #    f.write(xml)
 
 # ==============================
 # STREAMLIT APP
