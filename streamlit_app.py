@@ -1,12 +1,10 @@
 import os
+import re
 import zipfile
 import tempfile
 import streamlit as st
-from shapely.geometry import Point, Polygon, LineString
+from shapely.geometry import Point, LineString, Polygon
 from lxml import etree as ET
-import re
-
-import re
 
 # ✅ Fungsi untuk membersihkan tag/namespace asing di KML
 def clean_invalid_tags(file_path):
@@ -14,8 +12,8 @@ def clean_invalid_tags(file_path):
         content = f.read()
 
     # --- Step 1: Bersihkan gx: dan ns1: (yang paling sering bikin error) ---
-    content = re.sub(r"<(/?)(gx|ns1):[^>]+>", "", content)  # tag <gx:..> atau <ns1:..>
-    content = re.sub(r"\s+(gx|ns1):[^=]+=\"[^\"]*\"", "", content)  # atribut gx:..= atau ns1:..=
+    content = re.sub(r"<(/?)(gx|ns1):[^>]+>", "", content)  # tag <gx:..> / <ns1:..>
+    content = re.sub(r"\s+(gx|ns1):[^=]+=\"[^\"]*\"", "", content)  # atribut gx:..= / ns1:..=
     content = re.sub(r"\s+xmlns:(gx|ns1)=\"[^\"]*\"", "", content)  # deklarasi xmlns:gx / xmlns:ns1
 
     # --- Step 2: Bersihkan prefix asing lain yang masih lolos ---
@@ -27,19 +25,6 @@ def clean_invalid_tags(file_path):
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
 
-
-# def clean_invalid_tags(file_path):
- #    with open(file_path, "r", encoding="utf-8") as f:
-    #     xml = f.read()
-
-    # Hapus prefix asing <gx:Track> → <Track>
- #    xml = re.sub(r"</?\w+?:", "<", xml)
-
-    # Hapus deklarasi xmlns asing
-  #   xml = re.sub(r"xmlns:\w+=\"[^\"]+\"", "", xml)
-
- #    with open(file_path, "w", encoding="utf-8") as f:
-     #    f.write(xml)
 
 # ==============================
 # STREAMLIT APP
@@ -230,8 +215,7 @@ elif menu == "Rename NN di HP":
             st.download_button("⬇️ Download KMZ hasil rename", f, file_name="renamed.kmz")
 
 # =========================
-# MENU 3: Urutkan POLE Global
-# =========================
+# 🚀 Menu Urutkan POLE Global
 # =========================
 elif menu == "Urutkan POLE Global":
     uploaded_file = st.file_uploader("Upload file KMZ", type=["kmz"])
@@ -255,7 +239,8 @@ elif menu == "Urutkan POLE Global":
         # ✅ Bersihkan sebelum parsing
         clean_invalid_tags(kml_file)
 
-        parser = ET.XMLParser()
+        # ✅ Parser aman (recover)
+        parser = ET.XMLParser(recover=True, encoding="utf-8")
         tree = ET.parse(kml_file, parser=parser)
         root = tree.getroot()
         ns = {"kml": "http://www.opengis.net/kml/2.2"}
@@ -290,7 +275,7 @@ elif menu == "Urutkan POLE Global":
                     pname = placemark.find("kml:name", ns)
                     polygon = placemark.find(".//kml:Polygon", ns)
                     if pname is not None and polygon is not None:
-                        coords_text = polygon.find(".//kml:coordinates", ns).text
+                        coords_text = polygon.find("kml:coordinates", ns).text
                         coords = [(float(x.split(",")[0]), float(x.split(",")[1]))
                                   for x in coords_text.strip().split()]
                         boundaries[line_name][pname.text] = Polygon(coords)
