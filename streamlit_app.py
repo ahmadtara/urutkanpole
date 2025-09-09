@@ -6,21 +6,19 @@ import streamlit as st
 from shapely.geometry import Point, LineString, Polygon
 from lxml import etree as ET
 
-# ✅ Fungsi untuk membersihkan tag/namespace asing di KML
+# ✅ Fungsi untuk membersihkan tag gx:, ns1:, dll.
 def clean_invalid_tags(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # --- Step 1: Bersihkan gx: dan ns1: (yang paling sering bikin error) ---
-    content = re.sub(r"<(/?)(gx|ns1):[^>]+>", "", content)  # tag <gx:..> / <ns1:..>
-    content = re.sub(r"\s+(gx|ns1):[^=]+=\"[^\"]*\"", "", content)  # atribut gx:..= / ns1:..=
-    content = re.sub(r"\s+xmlns:(gx|ns1)=\"[^\"]*\"", "", content)  # deklarasi xmlns:gx / xmlns:ns1
+    # Hapus tag dengan prefix tidak valid (gx:, ns1:, dll.)
+    content = re.sub(r"<(/?)(gx|ns1):[^>]+>", "", content)
 
-    # --- Step 2: Bersihkan prefix asing lain yang masih lolos ---
-    # Hapus prefix di nama tag → <abc:Tag> → <Tag>
-    content = re.sub(r"</?\w+?:", "<", content)
-    # Hapus deklarasi xmlns yang tidak dikenal
-    content = re.sub(r"\s+xmlns:\w+=\"[^\"]*\"", "", content)
+    # Hapus atribut dengan prefix tidak valid
+    content = re.sub(r"\s+(gx|ns1):[^=]+=\"[^\"]*\"", "", content)
+
+    # Hapus deklarasi xmlns:gx, xmlns:ns1, dll.
+    content = re.sub(r"\s+xmlns:(gx|ns1)=\"[^\"]*\"", "", content)
 
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
