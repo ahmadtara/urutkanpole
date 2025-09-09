@@ -241,7 +241,100 @@ elif menu == "Urutkan POLE Global":
         root = tree.getroot()
         ns = {"kml": "http://www.opengis.net/kml/2.2"}
 
-        prefix = st.text_input("Prefix nama POLE", value="MR.PTSTP.P")
-        pad_width = st.number_input("Jumlah digit", min_value=2, max_value=6, value=3, step=1)
+        # Input prefix manual
+        prefix = st.text_input("Prefix nama POLE (boleh dikosongkan)", value="MR.PTSTP.P")
+        st.caption("💡 Jika dikosongkan, nama POLE akan berupa angka berurutan (contoh: 001, 002, dst)")
+        pad_width = st.number_input("Jumlah digit penomoran", min_value=2, max_value=6, value=3, step=1)
 
-        # ... (lanjut kode assign POLE dan susun ulang seperti punyamu)
+        # Ambil Distribution Cable (LineString)
+        cables = {}
+        for folder in root.findall(".//kml:Folder", ns):
+            fname = folder.find("kml:name", ns)
+            if fname is not None and fname.text.startswith("LINE "):
+                line_name = fname.text
+                for placemark in folder.findall(".//kml:Placemark", ns):
+                    line = placemark.find(".//kml:LineString", ns)
+                    if line is not None:
+                        coords_text = line.find("kml:coordinates", ns).text
+                        coords = [(float(x.split(",")[0]), float(x.split(",")[1]))
+                                  for x in coords_text.strip().split()]
+                        cables[line_name] = LineString(coords)
+
+        # Ambil Boundary (Polygon)
+        boundaries = {}
+        for folder in root.findall(".//kml:Folder", ns):
+            fname = folder.find("kml:name", ns)
+            if fname is not None and fname.text.startswith("LINE "):
+                line_name = fname.text
+                boundaries[line_name] = {}
+                for placemark in folder.findall(".//kml:Placemark", ns):
+                    pname = placemark.find("kml:name", ns)
+                    polygon = placemark.find(".//kml:Polygon", ns)
+                    if pname is not None and polygon is not None:
+                        coords_text = polygon.find(".//kml:coordinates", ns).text
+                        coords = [(float(x.split(",")[0]), float(x.split(",")[1]))
+                                  for x in coords_text.strip().split()]
+                        boundaries[line_name][pname.text] = Polygon(coords)
+
+        # Ambil POLE (Point)
+        poles = []
+        for folder in root.findall(".//kml:Folder", ns):
+            fname = folder.find("kml:name", ns)
+            if fname is not None and fname.text == "POLE":
+                for placemark in folder.findall("kml:Placemark", ns):
+                    pname = placemark.find("kml:name", ns)
+                    point = placemark.find(".//kml:Point", ns)
+                    if pname is not None and point is not None:
+                        coords_text = point.find("kml:coordinates", ns).text.strip()
+                        lon, lat, *_ = map(float, coords_text.split(","))
+                        poles.append((pname, placemark, Point(lon, lat)))
+
+        # Assign POLE ke line (cek cable dulu, fallback boundary)
+        assignments = {ln: [] for ln in boundaries.keys()}
+        for pname, pm, pt in poles:
+            assigned_line = None
+            # cek distribution cable terdekat
+            for line_name, cable in cables.items():
+                if cable.distance(pt) < 0.0001:  # threshold ~30m
+                    assigned_line = line_name
+                    break
+            # fallback ke boundary
+            if not assigned_line:
+                for line_name, bdict in boundaries.items():
+                    for poly in bdict.values():
+                        if poly.contains(pt):
+                            assigned_line = line_name
+                            break
+                    if assigned_line:
+                        break
+            if assigned_line:
+                assignments[assigned_line].append(pm)
+
+        # Susun ulang KML dengan penomoran global
+        document = ET.Element("kml", xmlns="http://www.opengis.net/kml/2.2")
+        doc_el = ET.SubElement(document, "Document")
+        counter = 1
+        for line in sorted(assignments.keys()):  # LINE A → LINE D
+            line_folder = ET.SubElement(doc_el, "Folder")
+            ET.SubElement(line_folder, "name").text = line
+            for pm in assignments[line]:
+                nm = pm.find("kml:name", ns)
+                if nm is not None:
+                    if prefix.strip():
+                        nm.text = f"{prefix}{str(counter).zfill(int(pad_width))}"
+                    else:
+                        nm.text = str(counter).zfill(int(pad_width))
+                line_folder.append(pm)
+                counter += 1
+
+        # Simpan hasil
+        new_kml = os.path.join(extract_dir, "poles_global.kml")
+        ET.ElementTree(document).write(new_kml, encoding="utf-8", xml_declaration=True)
+        output_kmz = os.path.join(extract_dir, "poles_global.kmz")
+        with zipfile.ZipFile(output_kmz, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(new_kml, "doc.kml")
+
+        with open(output_kmz, "rb") as f:
+            st.download_button("📥 Download POLE Global", f,
+                               file_name="poles_global.kmz",
+                               mime="application/vnd.google-earth.kmz")
