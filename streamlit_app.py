@@ -1,28 +1,25 @@
 import os
-import re
 import zipfile
 import tempfile
 import streamlit as st
-from shapely.geometry import Point, LineString, Polygon
+from shapely.geometry import Point, Polygon, LineString
 from lxml import etree as ET
+import re
 
-# ✅ Fungsi untuk membersihkan tag gx:, ns1:, dll.
+# ✅ Fungsi untuk membersihkan prefix tidak valid (gx:, ns1:, dll.)
 def clean_invalid_tags(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # Hapus tag dengan prefix tidak valid (gx:, ns1:, dll.)
-    content = re.sub(r"<(/?)(gx|ns1):[^>]+>", "", content)
-
-    # Hapus atribut dengan prefix tidak valid
-    content = re.sub(r"\s+(gx|ns1):[^=]+=\"[^\"]*\"", "", content)
-
-    # Hapus deklarasi xmlns:gx, xmlns:ns1, dll.
-    content = re.sub(r"\s+xmlns:(gx|ns1)=\"[^\"]*\"", "", content)
+    # Hapus semua prefix tak dikenal (gx:, ns1:, dsb)
+    content = re.sub(r"<(/?)[a-zA-Z0-9]+:[^>]+>", "", content)
+    # Hapus atribut dengan prefix tak dikenal
+    content = re.sub(r"\s+[a-zA-Z0-9]+:[^=]+=\"[^\"]*\"", "", content)
+    # Hapus deklarasi xmlns tak dikenal
+    content = re.sub(r"\s+xmlns:[a-zA-Z0-9]+=\"[^\"]*\"", "", content)
 
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
-
 
 # ==============================
 # STREAMLIT APP
@@ -213,7 +210,7 @@ elif menu == "Rename NN di HP":
             st.download_button("⬇️ Download KMZ hasil rename", f, file_name="renamed.kmz")
 
 # =========================
-# 🚀 Menu Urutkan POLE Global
+# MENU 3: Urutkan POLE Global
 # =========================
 elif menu == "Urutkan POLE Global":
     uploaded_file = st.file_uploader("Upload file KMZ", type=["kmz"])
@@ -237,7 +234,6 @@ elif menu == "Urutkan POLE Global":
         # ✅ Bersihkan sebelum parsing
         clean_invalid_tags(kml_file)
 
-        # ✅ Parser aman (recover)
         parser = ET.XMLParser(recover=True, encoding="utf-8")
         tree = ET.parse(kml_file, parser=parser)
         root = tree.getroot()
@@ -273,7 +269,7 @@ elif menu == "Urutkan POLE Global":
                     pname = placemark.find("kml:name", ns)
                     polygon = placemark.find(".//kml:Polygon", ns)
                     if pname is not None and polygon is not None:
-                        coords_text = polygon.find("kml:coordinates", ns).text
+                        coords_text = polygon.find(".//kml:coordinates", ns).text
                         coords = [(float(x.split(",")[0]), float(x.split(",")[1]))
                                   for x in coords_text.strip().split()]
                         boundaries[line_name][pname.text] = Polygon(coords)
@@ -337,4 +333,6 @@ elif menu == "Urutkan POLE Global":
             z.write(new_kml, "doc.kml")
 
         with open(output_kmz, "rb") as f:
-            st.download_button("📥 Download POLE Global", f, file_name="poles_global.kmz")
+            st.download_button("📥 Download POLE Global", f,
+                               file_name="poles_global.kmz",
+                               mime="application/vnd.google-earth.kmz")
