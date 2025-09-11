@@ -108,20 +108,30 @@ if menu == "Rapikan HP ke Boundary":
 
             # Assign ke boundary
             assignments = {ln: {bn: [] for bn in bdict.keys()} for ln, bdict in boundaries.items()}
+            uncovered = []  # <<=== untuk HP yang tidak masuk boundary
             assigned_count = 0
+
             for name, point, placemark in hp_points:
+                found = False
                 for line, bdict in boundaries.items():
                     for bname, poly in bdict.items():
                         if poly.contains(point):
                             assignments[line][bname].append(placemark)
                             assigned_count += 1
+                            found = True
                             break
+                    if found:
+                        break
+                if not found:
+                    uncovered.append(placemark)
 
-            st.info(f"📍 HP ditemukan: {len(hp_points)}, masuk boundary: {assigned_count}")
+            st.info(f"📍 HP ditemukan: {len(hp_points)}, masuk boundary: {assigned_count}, UNCOVER: {len(uncovered)}")
 
             # Susun ulang
             document = ET.Element("kml", xmlns="http://www.opengis.net/kml/2.2")
             doc_el = ET.SubElement(document, "Document")
+
+            # Folder untuk boundary
             for line, bdict in assignments.items():
                 line_folder = ET.SubElement(doc_el, "Folder")
                 ET.SubElement(line_folder, "name").text = line
@@ -130,6 +140,13 @@ if menu == "Rapikan HP ke Boundary":
                     ET.SubElement(boundary_folder, "name").text = bname
                     for pm in placemarks:
                         boundary_folder.append(pm)
+
+            # Folder UNCOVER
+            if uncovered:
+                uncover_folder = ET.SubElement(doc_el, "Folder")
+                ET.SubElement(uncover_folder, "name").text = "UNCOVER"
+                for pm in uncovered:
+                    uncover_folder.append(pm)
 
             new_kml = os.path.join(os.path.dirname(kml_file), "output.kml")
             ET.ElementTree(document).write(new_kml, encoding="utf-8", xml_declaration=True)
@@ -142,7 +159,7 @@ if menu == "Rapikan HP ke Boundary":
                                    mime="application/vnd.google-earth.kmz")
         except Exception as e:
             st.error(f"❌ Gagal memproses: {e}")
-
+            
 # =========================
 # MENU 2: Rename NN di HP
 # =========================
