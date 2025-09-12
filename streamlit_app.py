@@ -290,7 +290,7 @@ elif menu == "Urutkan POLE Global":
             for pname, pm, pt in poles:
                 assigned_line = None
                 for line_name, cable in cables.items():
-                    if cable.distance(pt) < 0.0001:
+                    if cable.distance(pt) < 0.10:
                         assigned_line = line_name
                         break
                 if not assigned_line:
