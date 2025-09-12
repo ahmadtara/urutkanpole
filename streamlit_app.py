@@ -1,291 +1,321 @@
 import os
-import re
 import zipfile
 import tempfile
-from copy import deepcopy
-
 import streamlit as st
-from shapely.geometry import Point, LineString, Polygon
+from shapely.geometry import Point, Polygon, LineString
 from lxml import etree as ET
+import re
 
-st.title("📌 KMZ Tools")
+# ==============================
+# Fungsi Pembersih Raw XML
+# ==============================
+def clean_raw_xml(raw_xml: bytes) -> bytes:
+    raw_xml = re.sub(rb'\s+xmlns:(?!gx)[a-zA-Z0-9_]+="[^"]*"', b"", raw_xml)
+    raw_xml = re.sub(rb"<(/?)[a-zA-Z0-9_]+:", rb"<\1", raw_xml)
+    raw_xml = re.sub(rb"\s+[a-zA-Z0-9_]+:([a-zA-Z0-9_]+=)", rb" \1", raw_xml)
+    raw_xml = re.sub(
+        rb"<kml[^>]*>",
+        b'<kml xmlns="http://www.opengis.net/kml/2.2" '
+        b'xmlns:gx="http://www.google.com/kml/ext/2.2">',
+        raw_xml,
+        count=1
+    )
+    return raw_xml
 
-MENU_OPTIONS = [
-    "Gabung: Rapikan HP + Urutkan POLE Global (HP COVER + POLE)",  # updated
+def load_and_clean_kml(kmz_or_kml_path: str) -> str:
+    extract_dir = tempfile.mkdtemp()
+    if kmz_or_kml_path.lower().endswith(".kmz"):
+        with zipfile.ZipFile(kmz_or_kml_path, 'r') as z:
+            z.extractall(extract_dir)
+            files = z.namelist()
+            kml_name = next((f for f in files if f.lower().endswith(".kml")), None)
+            if not kml_name:
+                raise FileNotFoundError("❌ Tidak ada file .kml di dalam KMZ.")
+            kml_file = os.path.join(extract_dir, kml_name)
+    else:
+        kml_file = kmz_or_kml_path
+
+    with open(kml_file, "rb") as f:
+        raw_xml = f.read()
+    cleaned = clean_raw_xml(raw_xml)
+
+    cleaned_kml = os.path.join(extract_dir, "cleaned.kml")
+    with open(cleaned_kml, "wb") as f:
+        f.write(cleaned)
+
+    return cleaned_kml
+
+
+# ==============================
+# STREAMLIT APP
+# ==============================
+st.title("📌 KMZ Tools Aman")
+
+menu = st.sidebar.radio("Pilih Menu", [
     "Rapikan HP ke Boundary",
     "Rename NN di HP",
-    "Urutkan POLE Global",
-]
-menu = st.sidebar.radio("Pilih Menu", MENU_OPTIONS)
+    "Urutkan POLE Global"
+])
 
 # =========================
-# Helpers
+# MENU 1: Rapikan HP ke Boundary
 # =========================
-KML_NS = "http://www.opengis.net/kml/2.2"
-ns = {"kml": KML_NS}
-
-def extract_kml_from_kmz(uploaded_file):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".kmz") as tmp:
-        tmp.write(uploaded_file.read())
-        kmz_file = tmp.name
-
-    extract_dir = tempfile.mkdtemp()
-    with zipfile.ZipFile(kmz_file, "r") as z:
-        z.extractall(extract_dir)
-        files = z.namelist()
-        kml_name = next((f for f in files if f.lower().endswith(".kml")), None)
-
-    if not kml_name:
-        return None, None, None, None
-
-    kml_file = os.path.join(extract_dir, kml_name)
-    return extract_dir, kmz_file, kml_name, kml_file
-
-def load_kml_tree(kml_file):
-    parser = ET.XMLParser(recover=True, encoding="utf-8")
-    tree = ET.parse(kml_file, parser=parser)
-    root = tree.getroot()
-    return tree, root
-
-def get_coordinates(coord_text):
-    coords = []
-    for c in (coord_text or "").strip().split():
-        parts = c.split(",")
-        if len(parts) >= 2:
-            lon = float(parts[0]); lat = float(parts[1])
-            coords.append((lon, lat))
-    return coords
-
-def deg_threshold_from_meters(meters):
-    return float(meters) / 111320.0  # kasar
-
-def clean_non_kml_namespaces(root):
-    to_remove = root.xpath('//*[namespace-uri()!="{}"]'.format(KML_NS))
-    for el in to_remove:
-        parent = el.getparent()
-        if parent is not None:
-            parent.remove(el)
-    for el in root.iter():
-        new_attrib = {}
-        for k, v in el.attrib.items():
-            if k.startswith("{"):
-                nsuri = k.split("}")[0][1:]
-                local = k.split("}")[1]
-                if nsuri == KML_NS:
-                    new_attrib[local] = v
-            else:
-                new_attrib[k] = v
-        el.attrib.clear()
-        el.attrib.update(new_attrib)
-
-def copy_styles(old_doc, new_doc):
-    if old_doc is None:
-        return
-    keep_locals = {"Style", "StyleMap", "Schema"}
-    for child in list(old_doc):
-        tag_local = ET.QName(child).localname
-        if tag_local in keep_locals:
-            new_doc.append(deepcopy(child))
-
-def find_folders_with_prefix_line(root):
-    res = {}
-    for folder in root.findall(".//kml:Folder", ns):
-        fname = folder.find("kml:name", ns)
-        if fname is not None and (fname.text or "").strip().upper().startswith("LINE "):
-            res[(fname.text or "").strip()] = folder
-    return res
-
-def collect_boundaries(root):
-    boundaries = {}
-    line_folders = find_folders_with_prefix_line(root)
-    for line_name, folder in line_folders.items():
-        boundaries[line_name] = {}
-        for placemark in folder.findall(".//kml:Placemark", ns):
-            pname = placemark.find("kml:name", ns)
-            polygon = placemark.find(".//kml:Polygon", ns)
-            if pname is not None and polygon is not None:
-                coords_text = polygon.find(".//kml:coordinates", ns)
-                if coords_text is None or coords_text.text is None:
-                    continue
-                coords = get_coordinates(coords_text.text)
-                if len(coords) >= 3:
-                    boundaries[line_name][(pname.text or "").strip()] = Polygon(coords)
-    return boundaries
-
-def collect_cables(root):
-    cables = {}
-    line_folders = find_folders_with_prefix_line(root)
-    for line_name, folder in line_folders.items():
-        for placemark in folder.findall(".//kml:Placemark", ns):
-            line = placemark.find(".//kml:LineString", ns)
-            if line is not None:
-                coords_text = line.find("kml:coordinates", ns)
-                if coords_text is None or coords_text.text is None:
-                    continue
-                coords = get_coordinates(coords_text.text)
-                if len(coords) >= 2:
-                    cables[line_name] = LineString(coords)
-                    break
-    return cables
-
-def collect_hp_points(root):
-    hp_points = []
-    for folder in root.findall(".//kml:Folder", ns):
-        fname = folder.find("kml:name", ns)
-        if fname is not None and (fname.text or "").strip().upper() == "HP":
-            for pm in folder.findall("kml:Placemark", ns):
-                nm = pm.find("kml:name", ns)
-                point = pm.find(".//kml:Point", ns)
-                if nm is not None and point is not None:
-                    coords_text = point.find("kml:coordinates", ns)
-                    if coords_text is None or coords_text.text is None:
-                        continue
-                    parts = coords_text.text.strip().split(",")
-                    if len(parts) >= 2:
-                        lon = float(parts[0]); lat = float(parts[1])
-                        hp_points.append(((nm.text or "").strip(), pm, Point(lon, lat)))
-    return hp_points
-
-def assign_hp_to_boundaries(hp_points, boundaries):
-    assignments = {}
-    for line, bdict in boundaries.items():
-        assignments.setdefault(line, {})
-        for bname in bdict.keys():
-            assignments[line].setdefault(bname, [])
-    for name, pm, pt in hp_points:
-        for line, bdict in boundaries.items():
-            for bname, poly in bdict.items():
-                if poly.contains(pt):
-                    assignments[line][bname].append(pm)
-                    break
-    return assignments
-
-def collect_poles(root):
-    poles = []
-    for folder in root.findall(".//kml:Folder", ns):
-        fname = folder.find("kml:name", ns)
-        if fname is not None and (fname.text or "").strip().upper() == "POLE":
-            for pm in folder.findall("kml:Placemark", ns):
-                nm = pm.find("kml:name", ns)
-                pt = pm.find(".//kml:Point", ns)
-                if nm is not None and pt is not None:
-                    coords_text = pt.find("kml:coordinates", ns)
-                    if coords_text is None or coords_text.text is None:
-                        continue
-                    parts = coords_text.text.strip().split(",")
-                    if len(parts) >= 2:
-                        lon = float(parts[0]); lat = float(parts[1])
-                        poles.append((nm, pm, Point(lon, lat)))
-    return poles
-
-def assign_poles_to_lines(poles, cables, boundaries, threshold_deg):
-    assignments = {ln: [] for ln in boundaries.keys()}
-    for nm, pm, pt in poles:
-        assigned_line = None
-        best_line, best_dist = None, float("inf")
-        for line_name, cable in cables.items():
-            try:
-                d = cable.distance(pt)
-            except Exception:
-                d = float("inf")
-            if d < best_dist:
-                best_dist, best_line = d, line_name
-        if best_line is not None and best_dist <= threshold_deg:
-            assigned_line = best_line
-        if not assigned_line:
-            for line_name, bdict in boundaries.items():
-                if any(poly.contains(pt) for poly in bdict.values()):
-                    assigned_line = line_name
-                    break
-        if assigned_line:
-            assignments[assigned_line].append(pm)
-    return assignments
-
-def build_new_document_separated(old_doc, hp_assignments, pole_assignments, prefix, pad_width):
-    new_doc = ET.Element(ET.QName(KML_NS, "Document"))
-    copy_styles(old_doc, new_doc)
-
-    # HP COVER
-    hp_root = ET.SubElement(new_doc, ET.QName(KML_NS, "Folder"))
-    ET.SubElement(hp_root, ET.QName(KML_NS, "name")).text = "HP COVER"
-    for line in sorted(hp_assignments.keys()):
-        subf = ET.SubElement(hp_root, ET.QName(KML_NS, "Folder"))
-        ET.SubElement(subf, ET.QName(KML_NS, "name")).text = f"HP COVER {line[-1]}"
-        for bname, pms in hp_assignments[line].items():
-            bf = ET.SubElement(subf, ET.QName(KML_NS, "Folder"))
-            ET.SubElement(bf, ET.QName(KML_NS, "name")).text = bname
-            for pm in pms:
-                bf.append(pm)
-
-    # POLE
-    pole_root = ET.SubElement(new_doc, ET.QName(KML_NS, "Folder"))
-    ET.SubElement(pole_root, ET.QName(KML_NS, "name")).text = "POLE"
-    counter = 1
-    for line in sorted(pole_assignments.keys()):
-        subf = ET.SubElement(pole_root, ET.QName(KML_NS, "Folder"))
-        ET.SubElement(subf, ET.QName(KML_NS, "name")).text = line
-        for pm in pole_assignments[line]:
-            nm = pm.find("kml:name", ns)
-            if nm is not None:
-                nm.text = f"{prefix}{str(counter).zfill(int(pad_width))}"
-            subf.append(pm)
-            counter += 1
-
-    return new_doc
-
-def replace_document_and_write(tree, root, new_doc):
-    old_doc = root.find("kml:Document", ns)
-    if old_doc is not None:
-        root.remove(old_doc)
-    root.append(new_doc)
-    return tree
-
-def write_back_to_kmz(kmz_file, kml_local_path, kml_arcname):
-    with zipfile.ZipFile(kmz_file, "a", zipfile.ZIP_DEFLATED) as z:
-        z.write(kml_local_path, arcname=kml_arcname)
-
-# =========================
-# MENU utama
-# =========================
-if menu == "Gabung: Rapikan HP + Urutkan POLE Global (HP COVER + POLE)":
+if menu == "Rapikan HP ke Boundary":
     uploaded_file = st.file_uploader("Upload file KMZ", type=["kmz"])
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        prefix = st.text_input("Prefix nama POLE", value="MR.PTSTP.P")
-    with col2:
-        pad_width = st.number_input("Jumlah digit (contoh 3 → 001)", min_value=2, max_value=6, value=3, step=1)
-    with col3:
-        thr_m = st.number_input("Ambang jarak ke Cable (meter)", min_value=1, value=30, step=1)
+    if uploaded_file is not None:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".kmz") as tmp:
+            tmp.write(uploaded_file.read())
+            kmz_file = tmp.name
+        st.success(f"✅ File berhasil diupload: {uploaded_file.name}")
 
-    clean_ns = st.checkbox("Bersihkan namespace non-standar", value=True)
+        try:
+            kml_file = load_and_clean_kml(kmz_file)
+            parser = ET.XMLParser(recover=True, encoding="utf-8")
+            tree = ET.parse(kml_file, parser=parser)
+            root = tree.getroot()
+            ns = {"kml": "http://www.opengis.net/kml/2.2"}
+
+            def get_coordinates(coord_text):
+                return [(float(c.split(",")[0]), float(c.split(",")[1]))
+                        for c in coord_text.strip().split()]
+
+            # Ambil boundary
+            boundaries = {}
+            for folder in root.findall(".//kml:Folder", ns):
+                fname = folder.find("kml:name", ns)
+                if fname is not None and fname.text.startswith("LINE "):
+                    line_name = fname.text
+                    boundaries[line_name] = {}
+                    for placemark in folder.findall(".//kml:Placemark", ns):
+                        pname = placemark.find("kml:name", ns)
+                        polygon = placemark.find(".//kml:Polygon", ns)
+                        if pname is not None and polygon is not None:
+                            coords_text = polygon.find(".//kml:coordinates", ns).text
+                            boundaries[line_name][pname.text] = Polygon(get_coordinates(coords_text))
+
+            # Ambil titik HP
+            hp_points = []
+            for folder in root.findall(".//kml:Folder", ns):
+                fname = folder.find("kml:name", ns)
+                if fname is not None and fname.text == "HP":
+                    for placemark in folder.findall("kml:Placemark", ns):
+                        pname = placemark.find("kml:name", ns)
+                        point = placemark.find(".//kml:Point", ns)
+                        if pname is not None and point is not None:
+                            coords_text = point.find("kml:coordinates", ns).text.strip()
+                            lon, lat, *_ = map(float, coords_text.split(","))
+                            hp_points.append((pname.text, Point(lon, lat), placemark))
+
+            # Assign ke boundary
+            assignments = {ln: {bn: [] for bn in bdict.keys()} for ln, bdict in boundaries.items()}
+            assigned_count = 0
+            for name, point, placemark in hp_points:
+                for line, bdict in boundaries.items():
+                    for bname, poly in bdict.items():
+                        if poly.contains(point):
+                            assignments[line][bname].append(placemark)
+                            assigned_count += 1
+                            break
+
+            st.info(f"📍 HP ditemukan: {len(hp_points)}, masuk boundary: {assigned_count}")
+
+            # Susun ulang
+            document = ET.Element("kml", xmlns="http://www.opengis.net/kml/2.2")
+            doc_el = ET.SubElement(document, "Document")
+            for line, bdict in assignments.items():
+                line_folder = ET.SubElement(doc_el, "Folder")
+                ET.SubElement(line_folder, "name").text = line
+                for bname, placemarks in bdict.items():
+                    boundary_folder = ET.SubElement(line_folder, "Folder")
+                    ET.SubElement(boundary_folder, "name").text = bname
+                    for pm in placemarks:
+                        boundary_folder.append(pm)
+
+            new_kml = os.path.join(os.path.dirname(kml_file), "output.kml")
+            ET.ElementTree(document).write(new_kml, encoding="utf-8", xml_declaration=True)
+            output_kmz = os.path.join(os.path.dirname(kml_file), "output.kmz")
+            with zipfile.ZipFile(output_kmz, "w", zipfile.ZIP_DEFLATED) as z:
+                z.write(new_kml, "doc.kml")
+
+            with open(output_kmz, "rb") as f:
+                st.download_button("📥 Download KMZ Hasil", f, "output.kmz",
+                                   mime="application/vnd.google-earth.kmz")
+        except Exception as e:
+            st.error(f"❌ Gagal memproses: {e}")
+
+# =========================
+# MENU 2: Rename NN di HP
+# =========================
+elif menu == "Rename NN di HP":
+    st.subheader("🔤 Ubah nama NN → NN-01, NN-02, ... di folder HP")
+
+    uploaded_file = st.file_uploader("Upload file KML/KMZ", type=["kml", "kmz"])
+    start_num = st.number_input("Nomor awal", min_value=1, value=1, step=1)
+    pad_width = st.number_input("Jumlah digit (padding)", min_value=1, value=2, step=1)
+    prefix = st.text_input("Prefix yang dicari", value="NN")
 
     if uploaded_file is not None:
-        extract_dir, kmz_file, kml_arcname, kml_file = extract_kml_from_kmz(uploaded_file)
-        if not kml_file:
-            st.error("❌ Tidak ada .kml dalam KMZ.")
-            st.stop()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[-1]) as tmp:
+            tmp.write(uploaded_file.read())
+            file_path = tmp.name
 
-        tree, root = load_kml_tree(kml_file)
-        if clean_ns:
-            clean_non_kml_namespaces(root)
+        try:
+            kml_file = load_and_clean_kml(file_path)
+            parser = ET.XMLParser(recover=True, encoding="utf-8")
+            tree = ET.parse(kml_file, parser=parser)
+            root = tree.getroot()
+            ns = {"kml": "http://www.opengis.net/kml/2.2"}
 
-        boundaries = collect_boundaries(root)
-        cables = collect_cables(root)
-        hp_points = collect_hp_points(root)
-        hp_assign = assign_hp_to_boundaries(hp_points, boundaries)
+            hp_folder = None
+            for f in root.findall(".//kml:Folder", ns):
+                n = f.find("kml:name", ns)
+                if n is not None and (n.text or "").strip() == "HP":
+                    hp_folder = f
+                    break
 
-        poles = collect_poles(root)
-        thr_deg = deg_threshold_from_meters(thr_m)
-        pole_assign = assign_poles_to_lines(poles, cables, boundaries, thr_deg)
+            if hp_folder is None:
+                st.error("❌ Folder 'HP' tidak ditemukan.")
+                st.stop()
 
-        old_doc = root.find("kml:Document", ns)
-        new_doc = build_new_document_separated(old_doc, hp_assign, pole_assign, prefix, pad_width)
+            nn_placemarks = []
+            for pm in hp_folder.findall("kml:Placemark", ns):
+                nm = pm.find("kml:name", ns)
+                if nm is not None and (nm.text or "").strip().upper().startswith(prefix.upper()):
+                    nn_placemarks.append(nm)
 
-        tree = replace_document_and_write(tree, root, new_doc)
-        tree.write(kml_file, encoding="utf-8", xml_declaration=True)
-        write_back_to_kmz(kmz_file, kml_file, kml_arcname)
+            st.info(f"✏️ NN ditemukan: {len(nn_placemarks)}")
 
-        with open(kmz_file, "rb") as fh:
-            st.success("✅ Berhasil update KMZ dengan struktur HP COVER + POLE.")
-            st.download_button("📥 Download KMZ", fh, file_name=uploaded_file.name,
-                               mime="application/vnd.google-earth.kmz")
+            counter = int(start_num)
+            for nm in nn_placemarks:
+                nm.text = f"{prefix}-{str(counter).zfill(int(pad_width))}"
+                counter += 1
+
+            out_dir = tempfile.mkdtemp()
+            new_kml = os.path.join(out_dir, "renamed.kml")
+            tree.write(new_kml, encoding="utf-8", xml_declaration=True)
+            output_kmz = os.path.join(out_dir, "renamed.kmz")
+            with zipfile.ZipFile(output_kmz, "w", zipfile.ZIP_DEFLATED) as z:
+                z.write(new_kml, "doc.kml")
+
+            with open(output_kmz, "rb") as f:
+                st.download_button("⬇️ Download KMZ hasil rename", f, file_name="renamed.kmz")
+        except Exception as e:
+            st.error(f"❌ Gagal memproses: {e}")
+
+# =========================
+# MENU 3: Urutkan POLE Global
+# =========================
+elif menu == "Urutkan POLE Global":
+    uploaded_file = st.file_uploader("Upload file KMZ", type=["kmz"])
+    if uploaded_file is not None:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".kmz") as tmp:
+            tmp.write(uploaded_file.read())
+            kmz_file = tmp.name
+        st.success(f"✅ File berhasil diupload: {uploaded_file.name}")
+
+        try:
+            kml_file = load_and_clean_kml(kmz_file)
+            parser = ET.XMLParser(recover=True, encoding="utf-8")
+            tree = ET.parse(kml_file, parser=parser)
+            root = tree.getroot()
+            ns = {"kml": "http://www.opengis.net/kml/2.2"}
+
+            prefix = st.text_input("Prefix nama POLE (boleh dikosongkan)", value="MR.PTSTP.P")
+            pad_width = st.number_input("Jumlah digit penomoran", min_value=2, max_value=6, value=3, step=1)
+
+            cables, boundaries, poles = {}, {}, []
+
+            # Cables
+            for folder in root.findall(".//kml:Folder", ns):
+                fname = folder.find("kml:name", ns)
+                if fname is not None and fname.text.startswith("LINE "):
+                    line_name = fname.text
+                    for placemark in folder.findall(".//kml:Placemark", ns):
+                        line = placemark.find(".//kml:LineString", ns)
+                        if line is not None:
+                            coords_text = line.find("kml:coordinates", ns).text
+                            coords = [(float(x.split(",")[0]), float(x.split(",")[1]))
+                                      for x in coords_text.strip().split()]
+                            cables[line_name] = LineString(coords)
+
+            # Boundaries
+            for folder in root.findall(".//kml:Folder", ns):
+                fname = folder.find("kml:name", ns)
+                if fname is not None and fname.text.startswith("LINE "):
+                    line_name = fname.text
+                    boundaries[line_name] = {}
+                    for placemark in folder.findall(".//kml:Placemark", ns):
+                        pname = placemark.find("kml:name", ns)
+                        polygon = placemark.find(".//kml:Polygon", ns)
+                        if pname is not None and polygon is not None:
+                            coords_text = polygon.find(".//kml:coordinates", ns).text
+                            coords = [(float(x.split(",")[0]), float(x.split(",")[1]))
+                                      for x in coords_text.strip().split()]
+                            boundaries[line_name][pname.text] = Polygon(coords)
+
+            # POLES
+            for folder in root.findall(".//kml:Folder", ns):
+                fname = folder.find("kml:name", ns)
+                if fname is not None and fname.text == "POLE":
+                    for placemark in folder.findall("kml:Placemark", ns):
+                        pname = placemark.find("kml:name", ns)
+                        point = placemark.find(".//kml:Point", ns)
+                        if pname is not None and point is not None:
+                            coords_text = point.find("kml:coordinates", ns).text.strip()
+                            lon, lat, *_ = map(float, coords_text.split(","))
+                            poles.append((pname, placemark, Point(lon, lat)))
+
+            st.info(f"📍 POLE ditemukan: {len(poles)}")
+
+            # Assign
+            assignments = {ln: [] for ln in boundaries.keys()}
+            assigned_count = 0
+            for pname, pm, pt in poles:
+                assigned_line = None
+                for line_name, cable in cables.items():
+                    if cable.distance(pt) < 0.0003:
+                        assigned_line = line_name
+                        break
+                if not assigned_line:
+                    for line_name, bdict in boundaries.items():
+                        for poly in bdict.values():
+                            if poly.contains(pt):
+                                assigned_line = line_name
+                                break
+                        if assigned_line:
+                            break
+                if assigned_line:
+                    assignments[assigned_line].append(pm)
+                    assigned_count += 1
+
+            st.info(f"✅ POLE berhasil di-assign ke LINE/boundary: {assigned_count}")
+
+            # Susun ulang
+            document = ET.Element("kml", xmlns="http://www.opengis.net/kml/2.2")
+            doc_el = ET.SubElement(document, "Document")
+            counter = 1
+            for line in sorted(assignments.keys()):
+                line_folder = ET.SubElement(doc_el, "Folder")
+                ET.SubElement(line_folder, "name").text = line
+                for pm in assignments[line]:
+                    nm = pm.find("kml:name", ns)
+                    if nm is not None:
+                        if prefix.strip():
+                            nm.text = f"{prefix}{str(counter).zfill(int(pad_width))}"
+                        else:
+                            nm.text = str(counter).zfill(int(pad_width))
+                    line_folder.append(pm)
+                    counter += 1
+
+            new_kml = os.path.join(os.path.dirname(kml_file), "poles_global.kml")
+            ET.ElementTree(document).write(new_kml, encoding="utf-8", xml_declaration=True)
+            output_kmz = os.path.join(os.path.dirname(kml_file), "poles_global.kmz")
+            with zipfile.ZipFile(output_kmz, "w", zipfile.ZIP_DEFLATED) as z:
+                z.write(new_kml, "doc.kml")
+
+            with open(output_kmz, "rb") as f:
+                st.download_button("📥 Download POLE Global", f,
+                                   file_name="poles_global.kmz",
+                                   mime="application/vnd.google-earth.kmz")
+        except Exception as e:
+            st.error(f"❌ Gagal memproses: {e}")
