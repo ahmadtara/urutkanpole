@@ -275,63 +275,93 @@ elif menu == "Urutkan POLE Global":
 
             cables, boundaries, poles = {}, {}, []
 
-            # Cables
+            # Ambil cable LINE
             for folder in root.findall(".//kml:Folder", ns):
                 fname = folder.find("kml:name", ns)
-                if fname is not None and fname.text.startswith("LINE "):
+                if fname is not None and fname.text and fname.text.startswith("LINE "):
                     line_name = fname.text
                     for placemark in folder.findall(".//kml:Placemark", ns):
                         line = placemark.find(".//kml:LineString", ns)
                         if line is not None:
-                            coords_text = line.find("kml:coordinates", ns).text
-                            coords = [(float(x.split(",")[0]), float(x.split(",")[1]))
-                                      for x in coords_text.strip().split()]
-                            cables[line_name] = LineString(coords)
+                            coords_el = line.find("kml:coordinates", ns)
+                            if coords_el is None or coords_el.text is None:
+                                continue
+                            coords_text = coords_el.text.strip()
+                            if not coords_text:
+                                continue
+                            try:
+                                coords = [(float(x.split(",")[0]), float(x.split(",")[1]))
+                                          for x in coords_text.split()]
+                                cables[line_name] = LineString(coords)
+                            except Exception:
+                                pass
 
-            # Boundaries
+            # Ambil boundary polygon
             for folder in root.findall(".//kml:Folder", ns):
                 fname = folder.find("kml:name", ns)
-                if fname is not None and fname.text.startswith("LINE "):
+                if fname is not None and fname.text and fname.text.startswith("LINE "):
                     line_name = fname.text
                     boundaries[line_name] = {}
                     for placemark in folder.findall(".//kml:Placemark", ns):
                         pname = placemark.find("kml:name", ns)
                         polygon = placemark.find(".//kml:Polygon", ns)
-                        if pname is not None and polygon is not None:
-                            coords_text = polygon.find("kml:coordinates", ns).text
-                            coords = [(float(x.split(",")[0]), float(x.split(",")[1]))
-                                      for x in coords_text.strip().split()]
-                            boundaries[line_name][pname.text] = Polygon(coords)
+                        if pname is not None and pname.text and polygon is not None:
+                            coords_el = polygon.find(".//kml:coordinates", ns)
+                            if coords_el is None or coords_el.text is None:
+                                continue
+                            coords_text = coords_el.text.strip()
+                            if not coords_text:
+                                continue
+                            try:
+                                coords = [(float(x.split(",")[0]), float(x.split(",")[1]))
+                                          for x in coords_text.split()]
+                                boundaries[line_name][pname.text] = Polygon(coords)
+                            except Exception:
+                                pass
 
-            # POLES
+            # Ambil titik POLE
             for folder in root.findall(".//kml:Folder", ns):
                 fname = folder.find("kml:name", ns)
-                if fname is not None and fname.text == "POLE":
+                if fname is not None and fname.text and fname.text == "POLE":
                     for placemark in folder.findall("kml:Placemark", ns):
                         pname = placemark.find("kml:name", ns)
                         point = placemark.find(".//kml:Point", ns)
-                        if pname is not None and point is not None:
-                            coords_text = point.find("kml:coordinates", ns).text.strip()
-                            lon, lat, *_ = map(float, coords_text.split(","))
-                            poles.append((pname, placemark, Point(lon, lat)))
+                        if pname is not None and pname.text and point is not None:
+                            coords_el = point.find("kml:coordinates", ns)
+                            if coords_el is None or coords_el.text is None:
+                                continue
+                            coords_text = coords_el.text.strip()
+                            if not coords_text:
+                                continue
+                            try:
+                                lon, lat, *_ = map(float, coords_text.split(","))
+                                poles.append((pname, placemark, Point(lon, lat)))
+                            except Exception:
+                                pass
 
             st.info(f"📍 POLE ditemukan: {len(poles)}")
 
-            # Assign
+            # Assign POLE ke LINE / boundary terdekat
             assignments = {ln: [] for ln in boundaries.keys()}
             assigned_count = 0
             for pname, pm, pt in poles:
                 assigned_line = None
                 for line_name, cable in cables.items():
-                    if cable.distance(pt) < 0.0003:
-                        assigned_line = line_name
-                        break
+                    try:
+                        if cable.distance(pt) < 0.0003:  # sekitar 30m
+                            assigned_line = line_name
+                            break
+                    except Exception:
+                        pass
                 if not assigned_line:
                     for line_name, bdict in boundaries.items():
                         for poly in bdict.values():
-                            if poly.contains(pt):
-                                assigned_line = line_name
-                                break
+                            try:
+                                if poly.contains(pt):
+                                    assigned_line = line_name
+                                    break
+                            except Exception:
+                                pass
                         if assigned_line:
                             break
                 if assigned_line:
@@ -340,7 +370,7 @@ elif menu == "Urutkan POLE Global":
 
             st.info(f"✅ POLE berhasil di-assign ke LINE/boundary: {assigned_count}")
 
-            # Susun ulang
+            # Susun ulang & beri nama baru
             document = ET.Element("kml", xmlns="http://www.opengis.net/kml/2.2")
             doc_el = ET.SubElement(document, "Document")
             counter = 1
