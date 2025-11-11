@@ -165,6 +165,21 @@ if menu == "Rapikan HP ke Boundary":
                     ET.SubElement(uncover_folder, "name").text = f"HP UNCOVER {line}"
                     for pm in pmlist:
                         uncover_folder.append(pm)
+            
+            # Simpan hasil ke KMZ
+            out_dir = tempfile.mkdtemp()
+            new_kml = os.path.join(out_dir, "rapikan_hp.kml")
+            ET.ElementTree(document).write(new_kml, encoding="utf-8", xml_declaration=True)
+            output_kmz = os.path.join(out_dir, "rapikan_hp.kmz")
+            with zipfile.ZipFile(output_kmz, "w", zipfile.ZIP_DEFLATED) as z:
+                z.write(new_kml, "doc.kml")
+
+            with open(output_kmz, "rb") as f:
+                st.download_button("📥 Download HP Rapi", f, file_name="rapikan_hp.kmz")
+
+        except Exception as e:
+            st.error(f"❌ Gagal memproses: {e}")
+
 
 # =========================
 # MENU 2: Rename NN di HP
