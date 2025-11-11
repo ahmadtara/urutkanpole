@@ -107,21 +107,48 @@ if menu == "Rapikan HP ke Boundary":
                             hp_points.append((pname.text, Point(lon, lat), placemark))
 
             # Assign ke boundary
+            # Assign ke boundary
             assignments = {ln: {bn: [] for bn in bdict.keys()} for ln, bdict in boundaries.items()}
+            hp_uncover = {}  # 🔧 tambahan: kumpulkan HP yang tidak masuk boundary
             assigned_count = 0
+            
             for name, point, placemark in hp_points:
+                assigned_line = None
+                assigned_boundary = None
+            
+                # Coba cari boundary yang mengandung titik HP
                 for line, bdict in boundaries.items():
                     for bname, poly in bdict.items():
                         if poly.contains(point):
                             assignments[line][bname].append(placemark)
+                            assigned_line = line
+                            assigned_boundary = bname
                             assigned_count += 1
                             break
-
-            st.info(f"📍 HP ditemukan: {len(hp_points)}, masuk boundary: {assigned_count}")
-
+                    if assigned_line:
+                        break
+            
+                # 🔧 Tambahan: kalau HP tidak masuk boundary manapun, cari LINE terdekat
+                if not assigned_line:
+                    nearest_line, nearest_dist = None, float("inf")
+                    for line, bdict in boundaries.items():
+                        for poly in bdict.values():
+                            d = poly.exterior.distance(point)
+                            if d < nearest_dist:
+                                nearest_line = line
+                                nearest_dist = d
+                    if nearest_line:
+                        # Simpan ke folder khusus HP UNCOVER per line
+                        hp_uncover.setdefault(nearest_line, []).append(placemark)
+            
+            st.info(f"📍 HP ditemukan: {len(hp_points)}, masuk boundary: {assigned_count}, "
+                    f"HP Uncover: {sum(len(v) for v in hp_uncover.values())}")
+            
             # Susun ulang
             document = ET.Element("kml", xmlns="http://www.opengis.net/kml/2.2")
             doc_el = ET.SubElement(document, "Document")
+            
+            # Boundary hasil normal
             for line, bdict in assignments.items():
                 line_folder = ET.SubElement(doc_el, "Folder")
                 ET.SubElement(line_folder, "name").text = line
@@ -130,18 +157,14 @@ if menu == "Rapikan HP ke Boundary":
                     ET.SubElement(boundary_folder, "name").text = bname
                     for pm in placemarks:
                         boundary_folder.append(pm)
-
-            new_kml = os.path.join(os.path.dirname(kml_file), "output.kml")
-            ET.ElementTree(document).write(new_kml, encoding="utf-8", xml_declaration=True)
-            output_kmz = os.path.join(os.path.dirname(kml_file), "output.kmz")
-            with zipfile.ZipFile(output_kmz, "w", zipfile.ZIP_DEFLATED) as z:
-                z.write(new_kml, "doc.kml")
-
-            with open(output_kmz, "rb") as f:
-                st.download_button("📥 Download KMZ Hasil", f, "output.kmz",
-                                   mime="application/vnd.google-earth.kmz")
-        except Exception as e:
-            st.error(f"❌ Gagal memproses: {e}")
+            
+            # 🔧 Tambahan: folder HP UNCOVER per LINE
+            if hp_uncover:
+                for line, pmlist in hp_uncover.items():
+                    uncover_folder = ET.SubElement(doc_el, "Folder")
+                    ET.SubElement(uncover_folder, "name").text = f"HP UNCOVER {line}"
+                    for pm in pmlist:
+                        uncover_folder.append(pm)
 
 # =========================
 # MENU 2: Rename NN di HP
@@ -287,8 +310,28 @@ elif menu == "Urutkan POLE Global":
                 if assigned_line:
                     assignments[assigned_line].append(pm)
                     assigned_count += 1
-
+            
+            # 🟡 Tambahan: jika masih ada POLE yang belum masuk boundary,
+            # masukkan ke boundary terdekat secara otomatis
+            unassigned_poles = [(pname, pm, pt) for pname, pm, pt in poles
+                                if not any(pm in plist for plist in assignments.values())]
+            
+            if unassigned_poles:
+                st.warning(f"⚠️ {len(unassigned_poles)} POLE tidak masuk boundary, akan dicari yang terdekat...")
+                for pname, pm, pt in unassigned_poles:
+                    nearest_line, nearest_dist = None, float("inf")
+                    for line_name, bdict in boundaries.items():
+                        for poly in bdict.values():
+                            d = poly.exterior.distance(pt)
+                            if d < nearest_dist:
+                                nearest_line = line_name
+                                nearest_dist = d
+                    if nearest_line:
+                        assignments[nearest_line].append(pm)
+                        assigned_count += 1
+            
             st.info(f"✅ POLE berhasil di-assign ke LINE/boundary: {assigned_count}")
+
 
             # Susun ulang
             document = ET.Element("kml", xmlns="http://www.opengis.net/kml/2.2")
